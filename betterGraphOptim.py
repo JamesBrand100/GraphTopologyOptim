@@ -6,7 +6,7 @@ import pdb
 
 # 1) Configurable parameters
 torch.manual_seed(0)
-num_nodes = 20
+num_nodes = 50
 max_dist = 0.1     # maximum direct-hop distance; larger needs intermediary
 beam_budget = 3.0  # sum of allocations per source
 lr = 0.1
