@@ -1,34 +1,40 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-from IPython.display import HTML
+import matplotlib.animation as animation
 
-# (re‑use your logits, temps, softmax, etc. from before)
-num_classes = 10
-k = 4
-logits = np.zeros(num_classes)
-logits[[1,3,5,7]] = np.array([2.0, 1.5, 3.0, 2.5])
-temps = np.linspace(0.1, 5.0, 100)
+def sharpen_top_n_np(X, normLim=3, temperature=5.0):
+    X = X.copy()
+    sorted_X = np.sort(X, axis=1)
+    ref_val = (sorted_X[:, -normLim] + sorted_X[:, -normLim - 1]) / 2  # avg of n and n-1
+    ref_val = ref_val[:, np.newaxis]
 
-fig, ax = plt.subplots(figsize=(8,4))
-bars = ax.bar(range(num_classes), np.zeros(num_classes), color='skyblue')
-ax.set_ylim(0, k)
-ax.set_xlabel("Class Index")
-ax.set_ylabel(f"Expected k‑hot Count (k={k})")
+    # Avoid division by zero
+    eps = 1e-8
+    x_pow = (X / (ref_val + eps)) ** temperature
+    complement_pow = ((1 - X) / (1 - ref_val + eps)) ** temperature
 
-def softmax(x):
-    e = np.exp(x - np.max(x))
-    return e / e.sum()
+    sharpened = x_pow / (x_pow + complement_pow + eps)
+    return np.clip(sharpened, 0, 1)
 
-def update(frame):
-    tau = temps[frame]
-    probs = softmax(logits / tau)
-    for bar, h in zip(bars, probs * k):
-        bar.set_height(h)
-    ax.set_title(f"Temperature τ = {tau:.2f}")
-    return bars
+X = np.arange(10, dtype=np.float32).reshape(1, -1)
+X = (X - X.min()) / (X.max() - X.min())
 
-anim = FuncAnimation(fig, update, frames=len(temps), blit=True, interval=100)
+fig, ax = plt.subplots()
+line, = ax.plot([], [], 'o-', lw=2)
+text = ax.text(0.5, 0.9, '', transform=ax.transAxes, ha='center')
 
-# Convert to JS and display
-HTML(anim.to_jshtml())
+def init():
+    ax.set_xlim(-0.5, 9.5)
+    ax.set_ylim(-0.1, 1.1)
+    return line, text
+
+def animate(i):
+    temperature = 0.5 + (i / 49) * 20
+    Y = sharpen_top_n_np(X, normLim=3, temperature=temperature).squeeze()
+    line.set_data(np.arange(10), Y)
+    text.set_text(f'Temperature: {temperature:.2f}')
+    return line, text
+
+ani = animation.FuncAnimation(fig, animate, init_func=init, frames=50, blit=True)
+
+plt.show()
