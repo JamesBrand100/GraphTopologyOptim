@@ -87,7 +87,7 @@ for epoch in range(epochs):
     # This converts our logits to valid values in the context of beam allocations 
     # it might possibly remove....the beam restrictions
 
-    hyperBase = 20000
+    hyperBase = None
 
     #calculate temperature for mapping based on current levels of loss 
     #if we have no latency right now, use temperature of 1 
@@ -96,8 +96,10 @@ for epoch in range(epochs):
         gamma = 1
     #if we can use latency for temperature calculation 
     else:
-        c = myUtils.plus_sinkhorn(logits, num_iters=int(3*20000/total_latency.item()), normLim = beam_budget, temperature = int(7*hyperBase/total_latency.item()))
-        gamma = 3 * hyperBase * total_latency.item() 
+        if(not hyperBase):
+            hyperBase = total_latency.item()
+        c = myUtils.plus_sinkhorn(logits, num_iters=int(3*hyperBase/total_latency.item()), normLim = beam_budget, temperature = int(7*hyperBase/total_latency.item()))
+        gamma = 3 * hyperBase / total_latency.item() 
 
     # ─── Compute Routing matrix, R[i,d,i] ──────────────────────────────────────────────
     alpha_sharp = similarityMetric ** gamma
