@@ -10,9 +10,9 @@ import copy
 # ─── 1) Configurable parameters ────────────────────────────────────────────────
 torch.manual_seed(0)
 beam_budget = 4      # sum of beam allocations per node
-lr          = 1 #0.1
-epochs      = 2
-numFlows = 100
+lr          = .01
+epochs      = 20
+numFlows = 20
 maxDemand   = 1.0
 
 gamma       = 3.0      # sharpness for alignment
@@ -21,7 +21,7 @@ trafficScaling = 100000
 
 #constellation params 
 orbitRadius = 6.946e6   
-numSatellites = 360
+numSatellites = 90
 orbitalPlanes = 10
 inclination = 80 
 phasingParameter = 5
@@ -87,14 +87,17 @@ for epoch in range(epochs):
     # This converts our logits to valid values in the context of beam allocations 
     # it might possibly remove....the beam restrictions
 
+    hyperBase = 20000
+
     #calculate temperature for mapping based on current levels of loss 
     #if we have no latency right now, use temperature of 1 
     if(not total_latency):
         c = myUtils.symmetric_sinkhorn(logits, num_iters=3, normLim = beam_budget, temperature = 1)
+        gamma = 1
     #if we can use latency for temperature calculation 
     else:
-        c = myUtils.plus_sinkhorn(logits, num_iters=3, normLim = beam_budget, temperature = int(1/(total_latency.item()/200000)))
-
+        c = myUtils.plus_sinkhorn(logits, num_iters=int(3*20000/total_latency.item()), normLim = beam_budget, temperature = int(7*hyperBase/total_latency.item()))
+        gamma = 3 * hyperBase * total_latency.item() 
 
     # ─── Compute Routing matrix, R[i,d,i] ──────────────────────────────────────────────
     alpha_sharp = similarityMetric ** gamma
@@ -129,7 +132,10 @@ for epoch in range(epochs):
         traffic_sent = T_current[:, :, None] * R.permute(1, 0, 2)  # [d, i, j]
 
         # Compute latency for all traffic
+        scaledDist = dmat / c
+        #compute one hop 
         latency = torch.einsum('dij,ij->', traffic_sent, dmat)  # Scalar
+        #then, affected by allocations 
         total_latency += latency
 
         # Propagate: sum over i (source), traffic now at j for each destination d
@@ -185,11 +191,17 @@ plt.show()
 c[c > 0.5] = 1
 c[c < 0.5] = 0
 
-connectivity_matrix = np.multiply(c, dmat )
+#process based on numpy components
+c = c.detach().numpy()
+dmat = dmat.detach().numpy()
+T_store = T_store.detach().numpy()
 
 #my method stuff 
+diffMethodProp = np.multiply(c, dmat )
+diffMethodProp[diffMethodProp == 0] = 1000
+diffMethodLatencyMat = myUtils.size_weighted_latency_matrix(diffMethodProp, T_store)
 print("My method size weighted latency")
-print(myUtils.size_weighted_latency_matrix(connectivity_matrix, T_store))
+print(np.sum(diffMethodLatencyMat))
 
 #get baseline stuff next 
 #first build out connectivity 
@@ -197,10 +209,12 @@ gridPlusConn = myUtils.build_plus_grid_connectivity(positions,
                                                     orbitalPlanes,
                                                     int(numSatellites/orbitalPlanes)) 
 #then... get then ext 
-connectivity_matrix = np.multiply(gridPlusConn, dmat )
+gridPlusProp = np.multiply(gridPlusConn, dmat )
+gridPlusProp[gridPlusProp == 0] = 1000
+gridPlusLatencyMat = myUtils.size_weighted_latency_matrix(gridPlusProp, T_store)
 
 #my method stuff 
 print("Grid plus size weighted latency")
-print(myUtils.size_weighted_latency_matrix(connectivity_matrix, T_store))
+print(np.sum(gridPlusLatencyMat))
 
 writer.close()

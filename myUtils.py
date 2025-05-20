@@ -518,3 +518,42 @@ def size_weighted_latency_matrix(connectivity_matrix, traffic_matrix):
     size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
 
     return size_weighted_latency
+
+
+def plot_connectivity(positions: np.ndarray, C: np.ndarray, figsize=(8,8)):
+    """
+    Plot satellites as points and ISL links as lines in 3D.
+
+    Parameters
+    ----------
+    positions : np.ndarray, shape (N,3)
+        Cartesian coordinates of each satellite.
+    C : np.ndarray, shape (N,N), dtype=bool or 0/1
+        Connectivity matrix: C[i,j]=True/1 if there is a link between i and j.
+    """
+    fig = plt.figure(figsize=figsize)
+    ax  = fig.add_subplot(111, projection='3d')
+
+    # Plot satellites
+    xs, ys, zs = positions[:,0], positions[:,1], positions[:,2]
+    ax.scatter(xs, ys, zs, s=20, color='blue', label='Satellites')
+
+    # Plot links
+    N = positions.shape[0]
+    # To avoid plotting each link twice, only draw for j > i
+    for i in range(N):
+        for j in range(i+1, N):
+            if C[i, j]:
+                xline = [positions[i,0], positions[j,0]]
+                yline = [positions[i,1], positions[j,1]]
+                zline = [positions[i,2], positions[j,2]]
+                ax.plot(xline, yline, zline, color='gray', linewidth=0.5)
+
+    # Styling
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Walker-Δ Constellation +‑Grid Connectivity')
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
