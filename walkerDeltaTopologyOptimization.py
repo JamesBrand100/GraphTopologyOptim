@@ -11,8 +11,8 @@ import copy
 torch.manual_seed(0)
 beam_budget = 4      # sum of beam allocations per node
 lr          = .01
-epochs      = 20
-numFlows = 20
+epochs      = 100
+numFlows = 40
 maxDemand   = 1.0
 
 gamma       = 3.0      # sharpness for alignment
@@ -92,7 +92,7 @@ for epoch in range(epochs):
     #calculate temperature for mapping based on current levels of loss 
     #if we have no latency right now, use temperature of 1 
     if(not total_latency):
-        c = myUtils.symmetric_sinkhorn(logits, num_iters=3, normLim = beam_budget, temperature = 1)
+        c = myUtils.plus_sinkhorn(logits, num_iters=3, normLim = beam_budget, temperature = 1)
         gamma = 1
     #if we can use latency for temperature calculation 
     else:
@@ -163,6 +163,10 @@ for epoch in range(epochs):
     writer.add_scalar('Loss/TotalLatency', total_latency.item(), epoch)
     
 # ─── Finish up ─────────────────────────────────────────────────────────────────
+R = R[R>0.01]
+plt.hist(R.detach().numpy(), bins=20, range=(0, 1), edgecolor='black')
+plt.show()
+
 
 originalC = torch.clone(c)
 
