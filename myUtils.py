@@ -36,6 +36,9 @@ import time
 import pdb
 import subprocess
 import torch
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from math import radians, sin, cos, sqrt, atan2
 
 def generateWalkerStarConstellationPoints(
         numSatellites,
@@ -222,6 +225,106 @@ def batch_similarity_metric(A, B, C):
     sim[~keep] = 0
 
     return torch.tensor(sim, dtype=torch.float32)
+
+def _get_tangent_vector(P1: torch.Tensor, P2: torch.Tensor) -> torch.Tensor:
+    P1_norm = torch.nn.functional.normalize(P1, p=2, dim=-1)
+    P2_norm = torch.nn.functional.normalize(P2, p=2, dim=-1)
+    dot_product = torch.sum(P1_norm * P2_norm, dim=-1, keepdim=True)
+    raw_tangent_vector = P2_norm - dot_product * P1_norm
+    norm_val = torch.linalg.norm(raw_tangent_vector, dim=-1, keepdim=True)
+    norm_val[norm_val == 0] = 1.0
+    tangent_vector = raw_tangent_vector / norm_val
+    return tangent_vector
+
+def batch_similarity_metric_new(
+    origin_points: torch.Tensor, # Shape (N, 3)
+    to_points_1: torch.Tensor,   # Shape (M, 3)
+    to_points_2: torch.Tensor    # Shape (K, 3)
+) -> torch.Tensor:
+    """
+    Computes the great-arc similarity (cosine of the angle between initial tangent vectors)
+    for all combinations of arcs defined by (origin_points[i] -> to_points_1[j])
+    and (origin_points[i] -> to_points_2[k]).
+
+    Output shape will be (N, M, K).
+
+    Assumes all input points are 3D Cartesian coordinates and will be normalized to unit vectors.
+    """
+    N = origin_points.shape[0]
+    M = to_points_1.shape[0] # Correctly gets M from the actual input tensor B
+    K = to_points_2.shape[0] # Correctly gets K from the actual input tensor C
+
+    # Normalize all points to unit vectors
+    origin_points_norm = torch.nn.functional.normalize(origin_points, p=2, dim=-1)
+    to_points_1_norm = torch.nn.functional.normalize(to_points_1, p=2, dim=-1)
+    to_points_2_norm = torch.nn.functional.normalize(to_points_2, p=2, dim=-1)
+
+    # --- Calculate tangent vectors for (Origin_i -> ToPoint1_j) arcs ---
+    # We need to broadcast origin_points_norm (N, 3) and to_points_1_norm (M, 3)
+    # to result in (N, M, 3) combinations.
+    # origin_points_norm becomes (N, 1, 3) then expands to (N, M, 3)
+    origin_points_expanded_for_T1 = origin_points_norm.unsqueeze(1).expand(-1, M, -1)
+    # to_points_1_norm becomes (1, M, 3) then expands to (N, M, 3)
+    to_points_1_expanded = to_points_1_norm.unsqueeze(0).expand(N, -1, -1)
+
+    # Tangent vectors from each A_i to each B_j. Shape: (N, M, 3)
+    tangent_vectors_1 = _get_tangent_vector(origin_points_expanded_for_T1, to_points_1_expanded)
+
+
+    # --- Calculate tangent vectors for (Origin_i -> ToPoint2_k) arcs ---
+    # We need to broadcast origin_points_norm (N, 3) and to_points_2_norm (K, 3)
+    # to result in (N, K, 3) combinations.
+    # origin_points_norm becomes (N, 1, 3) then expands to (N, K, 3)
+    origin_points_expanded_for_T2 = origin_points_norm.unsqueeze(1).expand(-1, K, -1)
+    # to_points_2_norm becomes (1, K, 3) then expands to (N, K, 3)
+    to_points_2_expanded = to_points_2_norm.unsqueeze(0).expand(N, -1, -1)
+
+    # Tangent vectors from each A_i to each C_k. Shape: (N, K, 3)
+    tangent_vectors_2 = _get_tangent_vector(origin_points_expanded_for_T2, to_points_2_expanded)
+
+    # --- Compute the final similarity (dot product of tangent vectors) ---
+    # We need to compare tangent_vectors_1[i, j, :] with tangent_vectors_2[i, k, :]
+    # To do this using broadcasting, we expand them to (N, M, 1, 3) and (N, 1, K, 3)
+    tangent_vectors_1_expanded_for_sim = tangent_vectors_1.unsqueeze(2) # Shape: (N, M, 1, 3)
+    tangent_vectors_2_expanded_for_sim = tangent_vectors_2.unsqueeze(1) # Shape: (N, 1, K, 3)
+
+    # Element-wise multiplication will broadcast to (N, M, K, 3)
+    # Summing over the last dimension (3) gives the dot product.
+    similarity_matrix = torch.sum(tangent_vectors_1_expanded_for_sim * tangent_vectors_2_expanded_for_sim, dim=-1)
+
+    # Clamp results to [0, 1] for valid cosine range
+    similarity_matrix = torch.clamp(similarity_matrix, 0, 1.0)
+
+    # --- Apply condition: if distance from origin to to_point_1 < distance from origin to to_point_2, set sim_metric to 0 ---
+
+    # Calculate Euclidean distance from origin_points to to_points_1
+    # origin_points_expanded_for_T1 has shape (N, M, 3)
+    # to_points_1_expanded has shape (N, M, 3)
+    # The distance will be (N, M)
+    distances_0_to_1 = torch.norm(to_points_1_expanded - origin_points_expanded_for_T1, dim=-1)
+
+    # Calculate Euclidean distance from origin_points to to_points_2
+    # origin_points_expanded_for_T2 has shape (N, K, 3)
+    # to_points_2_expanded has shape (N, K, 3)
+    # The distance will be (N, K)
+    distances_0_to_2 = torch.norm(to_points_2_expanded - origin_points_expanded_for_T2, dim=-1)
+
+    # Expand dimensions for broadcasting to (N, M, K) for comparison
+    # distances_0_to_1 becomes (N, M, 1)
+    distances_0_to_1_expanded = distances_0_to_1.unsqueeze(2)
+    # distances_0_to_2 becomes (N, 1, K)
+    distances_0_to_2_expanded = distances_0_to_2.unsqueeze(1)
+
+    # Create a boolean mask where the condition is met
+    # condition_mask will have shape (N, M, K)
+    # True where distance from origin to destination (to_points_1) is shorter than
+    # distance from origin to intermediate (to_points_2)
+    condition_mask = distances_0_to_1_expanded < distances_0_to_2_expanded
+
+    # Set the similarity metric to 0.0 where the condition is True
+    similarity_matrix[condition_mask] = 0.0
+
+    return similarity_matrix
     
 def symmetric_sinkhorn(logits, num_iters=10, epsilon=1e-9, normLim = 1, temperature = 1):
     """
@@ -314,6 +417,8 @@ def plus_sinkhorn(logits, num_iters=10, epsilon=1e-9, normLim=1, temperature=1):
 
         # Enforce symmetry
         X = 0.5 * (X + X.T)
+
+        X.fill_diagonal_(0)
 
     return X
 
@@ -413,7 +518,7 @@ def diagonal_symmetry_score(A, epsilon=1e-8):
     score = 1 - torch.norm(diff, p='fro') / (torch.norm(A, p='fro') + epsilon)
     return score
 
-def normalization_score(A, ref=1.0, epsilon=1e-8):
+def normalization_score(A, ref=4.0, epsilon=1e-8):
     row_sums = A.sum(dim=1)
     col_sums = A.sum(dim=0)
 
@@ -487,7 +592,19 @@ def build_plus_grid_connectivity(positions: np.ndarray,
 
     return C
 
-import numpy as np
+
+def FW(connectivity_matrix):
+    num_nodes = connectivity_matrix.shape[0]
+    distance_matrix = np.copy(connectivity_matrix)
+
+    # Floyd-Warshall algorithm to compute all-pairs shortest paths (latencies)
+    for k in range(num_nodes):
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                if distance_matrix[i, k] != np.inf and distance_matrix[k, j] != np.inf:
+                    distance_matrix[i, j] = np.minimum(distance_matrix[i, j], distance_matrix[i, k] + distance_matrix[k, j])
+
+    return distance_matrix
 
 def size_weighted_latency_matrix(connectivity_matrix, traffic_matrix):
     """
@@ -557,3 +674,205 @@ def plot_connectivity(positions: np.ndarray, C: np.ndarray, figsize=(8,8)):
     ax.legend()
     plt.tight_layout()
     plt.show()
+
+# def harden_routing(R):
+#     """
+#     Convert a soft routing matrix of shape [i, d, i] into a hard routing matrix
+#     where only the max along the last dimension is set to 1, others to 0.
+    
+#     Args:
+#         R (torch.Tensor): A tensor of shape [curr_node, dest_node, intermediary_node]
+    
+#     Returns:
+#         torch.Tensor: A hard routing matrix with the same shape as R
+#     """
+#     # Get index of max along the last dimension
+#     max_indices = torch.argmax(R, dim=-1, keepdim=True)  # shape: [i, d, 1]
+    
+#     # Create one-hot matrix
+#     hard_R = torch.zeros_like(R)
+#     hard_R.scatter_(-1, max_indices, 1.0)
+    
+#     print(torch.sum(hard_R - R))
+#     pdb.set_trace()
+
+#     return hard_R
+
+def harden_routing(R):
+    """
+    Convert a soft routing matrix [i, d, i] into a hard routing matrix by
+    selecting the max only where the routing row is active (row sum == 1).
+
+    Args:
+        R (torch.Tensor): A tensor of shape [curr_node, dest_node, intermediary_node]
+
+    Returns:
+        torch.Tensor: A partially hardened routing matrix
+    """
+    # Sum across last dim to find active rows (routing rows that sum to ~1)
+    row_sums = R.sum(dim=-1, keepdim=True)  # [i, d, 1]
+    active_mask = (row_sums > 1e-5).float()  # binary mask of active rows
+
+    # Get max index along last dim
+    max_indices = torch.argmax(R, dim=-1, keepdim=True)  # [i, d, 1]
+
+    # Create one-hot hard matrix
+    hard_R = torch.zeros_like(R)
+    hard_R.scatter_(-1, max_indices, 1.0)
+
+    # Only apply hardening where the row was active
+    # Otherwise, preserve the original soft R (which should be 0s anyway)
+    out_R = active_mask * hard_R + (1 - active_mask) * R
+
+    # print(torch.sum(out_R - R))
+    # pdb.set_trace()
+
+    return out_R
+
+def great_circle_distance_matrix_cartesian(points_xyz, radius):
+    """
+    Compute the great circle distance matrix from a set of 3D Cartesian coordinates on a sphere.
+
+    Args:
+        points_xyz (torch.Tensor): Tensor of shape [N, 3], where each row is (x, y, z).
+        radius (float): Radius of the sphere (e.g., Earth's radius in km).
+
+    Returns:
+        torch.Tensor: A [N, N] matrix of great circle distances between all pairs of points.
+    """
+    points_xyz = torch.from_numpy(points_xyz)
+    # Normalize to unit vectors in case input isn't normalized
+    unit_vecs = points_xyz / points_xyz.norm(dim=1, keepdim=True)
+
+    # Compute cosine of angular distances via dot products
+    cos_theta = torch.matmul(unit_vecs, unit_vecs.T).clamp(-1.0, 1.0)  # [N, N]
+
+    # Arc cosine to get central angles (in radians)
+    theta = torch.acos(cos_theta)
+
+    # Great circle distances = θ * radius
+    return theta * radius
+
+def proportional_routing_table(distance_matrix: torch.Tensor) -> torch.Tensor:
+    """
+    Computes a proportional routing table based on shortest path distances.
+
+    For a given current_node (i) and final_destination (d), the proportion of
+    traffic sent to a next_node (j) is inversely proportional to the sum of:
+    1. The shortest path distance from i to j (dist(i, j)).
+    2. The shortest path distance from j to d (dist(j, d)).
+
+    R[i, d, j] = (1 / (dist(i, j) + dist(j, d))) / Sum_over_k (1 / (dist(i, k) + dist(k, d)))
+
+    Args:
+        distance_matrix (torch.Tensor): A [N, N] tensor where distance_matrix[u, v]
+                                        represents the shortest path distance from
+                                        node u to node v (e.g., output from Floyd-Warshall).
+                                        Assumes unreachable paths are represented by
+                                        very large numbers (e.g., float('inf')).
+
+    Returns:
+        torch.Tensor: A [N, N, N] routing table R, where R[i, d, j] is the
+                      proportion of traffic from node i destined for node d
+                      that should be routed to node j.
+                      R[i, d, j] will be 0 if:
+                      - i == d (current node is already the destination).
+                      - j == i (not moving to a different node, typically not desired as a "hop").
+                      - The path (i -> j -> d) is not valid (e.g., involves unreachable segments).
+    """
+    num_nodes = distance_matrix.shape[0]
+    R_table = torch.zeros(num_nodes, num_nodes, num_nodes, dtype=torch.float)
+
+    # Define a value to represent infinity for unreachable paths.
+    # This should match how unreachable paths are represented in your distance_matrix.
+    INF = float('inf') 
+
+    for i in range(num_nodes):  # Iterate through current nodes (source)
+        for d in range(num_nodes):  # Iterate through destination nodes
+            if i == d:
+                # If the current node is the destination, no routing is needed.
+                # The corresponding slice of R_table (R[i, d, :]) remains all zeros,
+                # as initialized, which is the correct behavior.
+                continue
+
+            # This tensor will store the unnormalized "preference" for each next_node (j)
+            # for the current (i, d) pair.
+            preferences_for_j = torch.zeros(num_nodes, dtype=torch.float)
+            
+            for j in range(num_nodes):  # Iterate through possible next nodes (intermediate hop)
+                if i == j:
+                    # We typically don't consider routing to the same node as a "hop"
+                    # unless it's the destination itself (handled by the i == d check above).
+                    # So, the preference for routing to self is 0.
+                    continue
+
+                dist_i_j = distance_matrix[i, j] # Shortest path distance from current to next hop
+                dist_j_d = distance_matrix[j, d] # Shortest path distance from next hop to final destination
+
+                # Check if either segment of the path (i -> j or j -> d) is unreachable
+                # or if the combined cost is zero (which shouldn't happen for i != d, j != i unless distances are ill-defined)
+                if dist_i_j == INF or dist_j_d == INF:
+                    preferences_for_j[j] = 0.0 # Path is invalid, so no preference
+                else:
+                    # Calculate the cost: "that hop" (i to j) + "next node's distance from end destination" (j to d)
+                    cost = dist_i_j + dist_j_d
+                    
+                    # Ensure cost is not zero for division, though for valid paths (i != d, j != i),
+                    # cost should typically be positive. Add epsilon for numerical stability.
+                    if cost <= 1e-9: # If cost is effectively zero, this path is not useful
+                        preferences_for_j[j] = 0.0
+                    else:
+                        # Preference is inversely proportional to the cost
+                        preferences_for_j[j] = 1.0 / cost
+
+            # Normalize the preferences for this (i, d) pair so they sum to 1
+            total_preference = preferences_for_j.sum()
+            if total_preference > 0:
+                # If there are valid next hops, normalize the preferences to get proportions
+                R_table[i, d, :] = preferences_for_j / total_preference
+            # If total_preference is 0, it means no valid next hops were found for this (i,d) pair.
+            # In this case, R_table[i, d, :] will remain all zeros, indicating no outgoing traffic,
+            # which is the correct behavior for traffic that cannot proceed.
+
+    return R_table
+
+def differentiable_floyd_warshall(weights_matrix: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    """
+    Computes an approximate shortest path distance matrix using a differentiable
+    Floyd-Warshall algorithm with softmin (LogSumExp) approximation.
+
+    Args:
+        weights_matrix (torch.Tensor): A [N, N] tensor representing direct edge weights.
+                                        Assumes large values (e.g., float('inf')) for no direct edge.
+                                        This matrix is the initial distance matrix (D_0).
+        beta (float): Temperature parameter for the softmin approximation.
+                      Smaller beta -> closer to true min, but potentially less smooth gradients
+                      and numerical instability. Larger beta -> smoother gradients, but less
+                      accurate approximation of the true shortest path.
+
+    Returns:
+        torch.Tensor: A [N, N] tensor of approximate shortest path distances.
+    """
+    num_nodes = weights_matrix.shape[0]
+
+    distances = weights_matrix.clone() 
+    
+    distances.fill_diagonal_(0.0) 
+
+    for k in range(num_nodes):
+
+        term1 = -distances # This is an [N, N] tensor
+
+        term2 = -(distances[:, k].unsqueeze(1) + distances[k, :].unsqueeze(0)) # This is an [N, N] tensor
+
+        combined_terms = torch.stack([term1 / beta, term2 / beta], dim=0)
+        
+        min_approximated_neg_dist_div_beta = torch.logsumexp(combined_terms, dim=0)
+        
+        distances = -min_approximated_neg_dist_div_beta * beta
+        
+
+
+        distances.fill_diagonal_(0.0)
+
+    return distances
