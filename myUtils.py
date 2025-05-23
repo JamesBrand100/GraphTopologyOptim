@@ -513,6 +513,40 @@ def build_full_logits(logits_feasible, feasible_indices, shape):
     full_logits[feasible_indices[0], feasible_indices[1]] = logits_feasible
     return full_logits
 
+def build_full_logits_route_old(logits_feasible, feasible_indices, shape, dstIndices):
+    full_logits = torch.full(shape + (shape[0],), -1e9, device=logits_feasible.device)
+    print(len(feasible_indices[0]))
+    print(len(feasible_indices[1]))
+    print(len(dstIndices))
+    pdb.set_trace()
+    full_logits[feasible_indices[0], dstIndices, feasible_indices[1]] = logits_feasible
+    return full_logits
+
+def build_full_logits_route(logits_feasible, feasible_indices, shape, dstIndices):
+    N = shape[0]
+    full_logits = torch.full(shape + (N,), -1e9, device=logits_feasible.device)
+
+    curr_indices_np = feasible_indices[0]
+    inter_indices_np = feasible_indices[1]
+
+    curr_indices = torch.from_numpy(curr_indices_np).to(logits_feasible.device)
+    inter_indices = torch.from_numpy(inter_indices_np).to(logits_feasible.device)
+    dst_indices_tensor = torch.from_numpy(dstIndices).to(logits_feasible.device)
+    
+    L = len(curr_indices)
+    M = len(dst_indices_tensor)
+
+    reshaped_logits_feasible = logits_feasible.reshape(L, M)
+
+    curr_idx_expanded = curr_indices.unsqueeze(1)
+    inter_idx_expanded = inter_indices.unsqueeze(1)
+    dst_idx_expanded = dst_indices_tensor.unsqueeze(0)
+
+    full_logits[curr_idx_expanded, dst_idx_expanded, inter_idx_expanded] = reshaped_logits_feasible
+    
+    return full_logits
+
+
 def diagonal_symmetry_score(A, epsilon=1e-8):
     diff = A - A.T
     score = 1 - torch.norm(diff, p='fro') / (torch.norm(A, p='fro') + epsilon)

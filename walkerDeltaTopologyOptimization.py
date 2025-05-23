@@ -16,19 +16,19 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 beam_budget = 4      # sum of beam allocations per node
-lr          = .005
-epochs      = 50 #40 epochs for very small constellation. more like ~100-150 epochs maybe for bigger constellation (~360 sats or somethin) 
-numFlows = 30
+lr          = .01
+epochs      = 400 #40 epochs for very small constellation. more like ~100-150 epochs maybe for bigger constellation (~360 sats or somethin) 
+numFlows = 150
 maxDemand   = 1.0
 
 gamma       = 3.0      # sharpness for alignment
-max_hops    = 20       # how many hops to unroll
+max_hops    = 35       # how many hops to unroll
 trafficScaling = 100000
 
 #constellation params 
 orbitRadius = 6.946e6   
-numSatellites = 90
-orbitalPlanes = 10
+numSatellites = 400
+orbitalPlanes = 20
 inclination = 80 
 phasingParameter = 5
 
@@ -90,22 +90,26 @@ similarityMetric = myUtils.batch_similarity_metric_new(positions, positions[dst_
  
 feasible_indices = feasibleMask.nonzero()  # Shape: [2, num_feasible]
 connectivity_logits = torch.nn.Parameter(torch.zeros(len(feasible_indices[0]), dtype=torch.float))
-opt = torch.optim.SGD([connectivity_logits], lr=lr)
+connOpt = torch.optim.SGD([connectivity_logits], lr=lr)
 
 if(routingMethod == "LearnedLogit"):
-    routing_logits = torch.nn.Parameter(torch.zeros(len(feasible_indices[0]), dtype=torch.float))
-    opt = torch.optim.SGD([connectivity_logits], lr=lr)   
+    routing_logits = torch.nn.Parameter(torch.zeros(len(feasible_indices[0])*numFlows, dtype=torch.float))
+    routeOpt = torch.optim.SGD([routing_logits], lr=lr)   
 
 #create storage for loss and latency 
 loss_history = []
 total_latency = None
 # ─── 6) Create differentiable process for learning beam allocations───────────────────────────────────────
 for epoch in range(epochs):
-    #Remove gradients 
-    opt.zero_grad()
 
-    logits = myUtils.build_full_logits(connectivity_logits, feasible_indices, feasibleMask.shape)
-    logits = torch.nn.functional.softplus(logits)
+    if(routingMethod == "LearnedLogit"):
+        routeOpt.zero_grad()
+    
+    #Remove gradients 
+    connOpt.zero_grad()
+    
+    connLogits = myUtils.build_full_logits(connectivity_logits, feasible_indices, feasibleMask.shape)
+    connLogits = torch.nn.functional.softplus(connLogits)
 
     # Implement logit normalization 
     # This converts our logits to valid values in the context of beam allocations 
@@ -116,16 +120,39 @@ for epoch in range(epochs):
     #calculate temperature for mapping based on current levels of loss 
     #if we have no latency right now, use temperature of 1 
     if(not total_latency):
-        c = myUtils.plus_sinkhorn(logits, num_iters=3, normLim = beam_budget, temperature = 1)
+        c = myUtils.plus_sinkhorn(connLogits, num_iters=3, normLim = beam_budget, temperature = 1)
         gamma = 1
     #if we can use latency for temperature calculation 
     else:
         if(not hyperBase):
             hyperBase = total_latency.item()
-        c = myUtils.plus_sinkhorn(logits, num_iters=int(6*hyperBase/total_latency.item()), normLim = beam_budget, temperature = 3*int(hyperBase/total_latency.item()))
-        gamma =  hyperBase / total_latency.item() 
+        c = myUtils.plus_sinkhorn(connLogits, num_iters=int(6*epoch/epochs + 1), normLim = beam_budget, temperature = int(3*epoch/epochs + 1))
+        gamma = int(epoch/epochs + 1)
 
     # ─── Compute Routing matrix, R[i,d,i] ──────────────────────────────────────────────
+    #work with routing logits 
+    if(routingMethod == "LearnedLogit"):
+        #build logits similarly for routing
+        routeLogits = myUtils.build_full_logits_route(routing_logits, feasible_indices, feasibleMask.shape, dst_indices)
+        #create soft plus for routing as well, can only have positive values 
+        #routeLogits = torch.nn.functional.softplus(routeLogits)
+
+        #set the indces to 0 so that sinks are properly initialized 
+        routeLogits[dst_indices, dst_indices, :] = -1e12
+
+        #create soft max across 2nd dimension to put into valid prob distribution for routing 
+        # @ epoch = 0 -> temp = 1
+        # @ epoch = max -> temp = 0 
+        routeLogits = routeLogits / (1 - epoch/epochs) # This is the temperature scaling
+        routeLogits = torch.softmax(routeLogits, dim = 2)
+
+        #normalize across 3rd dimension ("outflow" for each)
+        #routeLogits = routeLogits / (torch.sum(routeLogits, dim = 2) + 1e-15)
+
+        R = routeLogits
+
+        #print("Num Sharp: " +str(torch.sum(R > 0.8)))
+
     if routingMethod == "FWPropBig":
         #Compute routing matrix using floyd warshall first with beam weighted distance 
         distance_matrix = myUtils.FW( dmat / (c.detach().numpy()+1e-15))
@@ -155,6 +182,7 @@ for epoch in range(epochs):
 
         #within routing matrix, zero out outgoing edges for when we are at our destination 
         R[dst_indices, dst_indices, :] = 0
+
 
     # #sharpen routing components:
     #R = R ** (gamma)
@@ -231,12 +259,17 @@ for epoch in range(epochs):
     loss_history.append(total_latency.item())
     total_latency.backward(retain_graph=True)
 
-    holdLogits = logits.clone()
+    holdLogits = connLogits.clone()
     foldFLogits = connectivity_logits.clone()
 
     torch.nn.utils.clip_grad_norm_(connectivity_logits, max_norm=10.0)
-    opt.step()
-    print("Logit magnitude diff, all: " + str( torch.sum(torch.abs(holdLogits - logits))))
+    connOpt.step()
+
+    if(routingMethod == "LearnedLogit"):
+        torch.nn.utils.clip_grad_norm_(routing_logits, max_norm=10.0)
+        routeOpt.step()
+
+    print("Logit magnitude diff, all: " + str( torch.sum(torch.abs(holdLogits - connLogits))))
     print("Logit magnitude diff, feasible: " + str( torch.sum(torch.abs(foldFLogits - connectivity_logits))))
 
     print(f"Epoch {epoch+1}/{epochs}, Loss: {total_latency.item():.4f}")
@@ -247,9 +280,11 @@ for epoch in range(epochs):
 # ─── Finish up ─────────────────────────────────────────────────────────────────
 R = R[R>0.01]
 plt.hist(R.detach().numpy(), bins=100, range=(0, 1), edgecolor='black')
-#plt.show()
+plt.show()
 
 originalC = torch.clone(c)
+pdb.set_trace()
+
 
 print("Diff")
 print( torch.sum(torch.abs(c - originalC)))
