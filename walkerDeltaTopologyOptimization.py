@@ -56,7 +56,7 @@ def run_simulation(numFlows,
     phasingParameter = 5
 
     #init routing: {"LOSweight","FWPropDiff","FWPropBig", "LearnedLogit"}
-    routingMethod = "LearnedLogit"
+    #routingMethod = "LearnedLogit"
 
     # ─── Prepare TensorBoard ───────────────────────────────────────────────────────
     # every run goes under runs/<timestamp> by default
@@ -352,6 +352,10 @@ def run_simulation(numFlows,
     if(fileToSaveTo != "None"):
         with open(fileToSaveTo+str(".json"), 'w') as f:
             json.dump(metrics, f)
+    else:
+        print("No file name given, metrics not saved, here they are:")
+        print("Diff Method: "+str(diffSumLatency))
+        print("Grid plus: "+str(gridPlusSumLatency))
 
     #Plots 
     #myUtils.plot_connectivity(positions, c, figsize=(8,8))
@@ -381,6 +385,26 @@ def run_simulation(numFlows,
     # print("My method size weighted latency")
     # print(np.sum(diffMethodLatencyMat))
 
+# def run_main():
+#     parser = argparse.ArgumentParser(description='Run the simulation')
+#     parser.add_argument('--numFlows', type=int, default=30, help='Number of flows')
+#     parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
+#     parser.add_argument('--numSatellites', type=int, default=100, help='Number of satellites')
+#     parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
+#     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
+#     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
+#     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')
+
+#     args = parser.parse_args()
+
+#     run_simulation(args.numFlows, 
+#                    args.epochs, 
+#                    args.numSatellites, 
+#                    args.orbitalPlanes, 
+#                    args.routingMethod, 
+#                    args.lr, 
+#                    args.fileName)
+    
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=30, help='Number of flows')
@@ -393,12 +417,13 @@ def run_main():
 
     args = parser.parse_args()
 
-    run_simulation(args.numFlows, 
-                   args.epochs, 
-                   args.numSatellites, 
-                   args.orbitalPlanes, 
-                   args.routingMethod, 
-                   args.lr, 
+    # Reordered arguments to match the run_simulation function signature
+    run_simulation(args.numFlows,
+                   args.numSatellites,       
+                   args.orbitalPlanes,       
+                   args.routingMethod,      
+                   args.epochs,              
+                   args.lr,
                    args.fileName)
 
 if __name__ == '__main__':
