@@ -375,6 +375,60 @@ def sharpen_top_n(X, normLim=3, temperature=5.0):
     sharpened = x_pow / (x_pow + complement_pow + eps)
     return torch.clip(sharpened, 0, 1)
 
+def sharpen_top_n_plus(X, normLim=3, temperature=5.0):
+    #iterate through plus instance
+    for i in range(len(X)):
+        #get top 2n entries for each plus instance
+        sorted_X_plus, _ = torch.sort(torch.cat(X[i], X[:,i]), dim=1)
+        ref_val = (sorted_X_plus[:, -normLim*2] + sorted_X_plus[:, -normLim*2 - 1]) / 2 #avg of components 
+        ref_val = ref_val[:, np.newaxis]
+
+        # Avoid division by zero
+        eps = 1e-8
+        x_pow = (X[i] / (ref_val + eps)) ** temperature
+        complement_pow = ((1 - X[i]) / (1 - ref_val + eps)) ** temperature
+
+        #sharpen 
+        sharpened = x_pow / (x_pow + complement_pow + eps)
+        X[i] = torch.clip(sharpened, 0, 1)
+
+        #then store sharpened values
+        X[i] = sharpened[0:len(X[i])]
+        X[:,i] = sharpened[len(X[i]):]  
+
+def sharpen_top_n_plus_more(X, normLim=3, temperature=5.0):
+    if X.dim() != 2 or X.shape[0] != X.shape[1]:
+        raise ValueError("Input X must be a square 2D tensor.")
+
+    sharpened_X = X.clone()
+    eps = 1e-8
+
+    for i in range(X.shape[0]):
+        current_row = X[i, :]
+        current_col = X[:, i]
+
+        combined_elements = torch.cat((current_row, current_col))
+        sorted_combined, _ = torch.sort(combined_elements)
+
+        if sorted_combined.numel() < (normLim * 2 + 1):
+             ref_val_scalar = sorted_combined[0]
+        else:
+             ref_val_scalar = (sorted_combined[-normLim*2] + sorted_combined[-normLim*2 - 1]) / 2
+
+        ref_val_tensor = torch.tensor(ref_val_scalar, device=X.device, dtype=X.dtype).unsqueeze(0)
+
+        x_pow_row = (current_row / (ref_val_tensor + eps)) ** temperature
+        complement_pow_row = ((1 - current_row) / (1 - ref_val_tensor + eps)) ** temperature
+        sharpened_row = x_pow_row / (x_pow_row + complement_pow_row + eps)
+        sharpened_X[i, :] = torch.clip(sharpened_row, 0, 1)
+
+        x_pow_col = (current_col / (ref_val_tensor + eps)) ** temperature
+        complement_pow_col = ((1 - current_col) / (1 - ref_val_tensor + eps)) ** temperature
+        sharpened_col = x_pow_col / (x_pow_col + complement_pow_col + eps)
+        sharpened_X[:, i] = torch.clip(sharpened_col, 0, 1)
+
+    return sharpened_X
+
 
 def plus_sinkhorn(logits, num_iters=10, epsilon=1e-9, normLim=1, temperature=1):
     """
@@ -776,7 +830,7 @@ def great_circle_distance_matrix_cartesian(points_xyz, radius):
     """
     points_xyz = torch.from_numpy(points_xyz)
     # Normalize to unit vectors in case input isn't normalized
-    unit_vecs = points_xyz / points_xyz.norm(dim=1, keepdim=True)
+    unit_vecs = points_xyz / torch.norm(points_xyz, dim=1, keepdim=True)
 
     # Compute cosine of angular distances via dot products
     cos_theta = torch.matmul(unit_vecs, unit_vecs.T).clamp(-1.0, 1.0)  # [N, N]

@@ -32,7 +32,7 @@ def great_circle_arc(start, end, num_points=100):
 
 # Define points on the unit sphere
 g = np.array([1, 0, 0])  # satellite
-d = np.array([0, 1, 0])  # destination
+d = np.array([1, 0, 1]) / np.linalg.norm([1, 0, 1])  # destination
 i1 = np.array([0, 0, 1])   # neighbor 1
 i2 = np.array([1, 1, 0]) / np.linalg.norm([1, 1, 0])  # neighbor 2
 
