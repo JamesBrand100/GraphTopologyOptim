@@ -21,6 +21,7 @@ def run_simulation(numFlows,
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
     # This is the first and most important change: define the device (GPU or CPU)   
+    
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"--- Using GPU: {torch.cuda.get_device_name(0)} ---")
@@ -37,21 +38,23 @@ def run_simulation(numFlows,
     torch.manual_seed(0)
 
     #training params
-    lr          = .01
-    epochs      = 200 #40 epochs for very small constellation. more like ~100-150 epochs maybe for bigger constellation (~360 sats or somethin) 
+    #we commented out the ones that are derived from user inputs 
+
+    #lr          = .01
+    #epochs      = 200 #40 epochs for very small constellation. more like ~100-150 epochs maybe for bigger constellation (~360 sats or somethin) 
     gamma       = 3.0      # sharpness for alignment
 
     #simulation params 
     trafficScaling = 100000
     max_hops    = 20       # how many hops to unroll
     maxDemand   = 1.0
-    numFlows = 30
+    #numFlows = 30
     beam_budget = 4      # sum of beam allocations per node
 
     #constellation params 
     orbitRadius = 6.946e6   
-    numSatellites = 100
-    orbitalPlanes = 10
+    #numSatellites = 100
+    #orbitalPlanes = 10
     inclination = 80 
     phasingParameter = 5
 
@@ -305,8 +308,8 @@ def run_simulation(numFlows,
     # ─── Finish up ─────────────────────────────────────────────────────────────────
 
     #Create Metrics
-    diagSym = myUtils.diagonal_symmetry_score(c)
-    normScore = myUtils.normalization_score(c, ref=4.0, epsilon=1e-8)
+    diagSym = myUtils.diagonal_symmetry_score(c).detach().numpy()
+    normScore = myUtils.normalization_score(c, ref=4.0, epsilon=1e-8).detach().numpy()
 
     #hardcode / process connections 
     c[c > 0.5] = 1
@@ -348,7 +351,7 @@ def run_simulation(numFlows,
 
     writer.close()
 
-    # Save the dictionary to a file, if we gve a proper name 
+    # Save the dictionary to a file, if we give a proper name 
     if(fileToSaveTo != "None"):
         with open(fileToSaveTo+str(".json"), 'w') as f:
             json.dump(metrics, f)
