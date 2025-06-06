@@ -9,6 +9,10 @@ import copy
 import random
 import json
 import argparse
+from Baselines.funcedBaseline import *
+
+
+
 
 
 def run_simulation(numFlows, 
@@ -17,7 +21,10 @@ def run_simulation(numFlows,
                    routingMethod, 
                    epochs, 
                    lr, 
-                   fileToSaveTo):
+                   fileToSaveTo,
+                   metricToOptimize = "latency"):
+
+  
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
     # This is the first and most important change: define the device (GPU or CPU)   
@@ -57,6 +64,8 @@ def run_simulation(numFlows,
     #orbitalPlanes = 10
     inclination = 80 
     phasingParameter = 5
+
+    EARTH_MEAN_RADIUS = 6371.0e3
 
     #init routing: {"LOSweight","FWPropDiff","FWPropBig", "LearnedLogit"}
     #routingMethod = "LearnedLogit"
@@ -99,7 +108,6 @@ def run_simulation(numFlows,
     positions = torch.from_numpy(positions)
     similarityMetric = myUtils.batch_similarity_metric_new(positions, positions[dst_indices], positions).float()
 
-
     #old computation for sim metric 
     #similarityMetric = myUtils.batch_similarity_metric(positions, positions[dst_indices], positions)
 
@@ -127,8 +135,21 @@ def run_simulation(numFlows,
     #create storage for loss and latency 
     loss_history = []
     total_latency = None
+
+    # Create the reset functions
+    update_state, reset_state, reset_to_best, find_closest_logit_history = myUtils.create_individual_param_reset_method(
+        [(connectivity_logits, connOpt)],
+        epochs_to_track=2
+    )
+
+    reset = False
+
     # ─── 6) Create differentiable process for learning beam allocations───────────────────────────────────────
     for epoch in range(epochs):
+
+        #if we are at the last epoch, load the most recent best one. 
+        if(epoch == epochs - 1):
+            reset_to_best()
 
         if(routingMethod == "LearnedLogit"):
             routeOpt.zero_grad()
@@ -226,6 +247,7 @@ def run_simulation(numFlows,
         T_current = torch.zeros((numSatellites, numSatellites))
         #initialize it the src_indices as the actual demand vals 
         T_current[dst_indices, src_indices] = demandVals
+        totalDemand = torch.sum(demandVals).detach().numpy()
         T_store = copy.deepcopy(T_current)
 
         #hoppity hop 
@@ -279,10 +301,20 @@ def run_simulation(numFlows,
             #
             T_current = T_next
 
-        # if(hyperBase):
-        #     β = hyperBase / total_latency.item()
-        #     entropy = -torch.sum(c * torch.log(c + 1e-8))
-        #     total_latency = total_latency - β * entropy
+        # ─── End Latency unrolling ────────────────────────────────────────────────
+        #check if current loss is sizably worse than last loss.
+        #if it is, then reset and try again
+        # if(not reset and len(loss_history) > 0 and total_latency.item() > loss_history[-1] * 1.5):
+        #     print(f"Epoch {epoch+1}/{epochs}, Loss: {total_latency.item():.4f}")
+        #     print("Loss increased by 50%, resetting")
+            
+        #     #reset state of params / optims
+        #     reset_state(epoch)
+
+        #     reset = True          
+            
+        #     continue
+        # reset = False
 
         loss_history.append(total_latency.item())
         total_latency.backward(retain_graph=True)
@@ -296,6 +328,8 @@ def run_simulation(numFlows,
         if(routingMethod == "LearnedLogit"):
             torch.nn.utils.clip_grad_norm_(routing_logits, max_norm=1.0)
             routeOpt.step()
+
+        update_state(epoch, total_latency.item())
 
         print("Logit magnitude diff, all: " + str( torch.sum(torch.abs(holdLogits - connLogits))))
         print("Logit magnitude diff, feasible: " + str( torch.sum(torch.abs(foldFLogits - connectivity_logits))))
@@ -342,13 +376,28 @@ def run_simulation(numFlows,
     gridPlusLatencyMat = myUtils.size_weighted_latency_matrix(gridPlusProp, T_store)
     gridPlusSumLatency = np.sum(gridPlusLatencyMat)
 
+    motifSumLatency = calculate_weighted_latency(
+        1,
+        numSatellites,
+        orbitalPlanes,
+        inclination,
+        phasingParameter,
+        orbitRadius,
+        EARTH_MEAN_RADIUS,
+        src_indices,
+        dst_indices,
+        demandVals,
+        False
+    ) 
+
+
     #save all metrics to dictionary
     metrics = {}
-    metrics["Diagonal Symmetry Score"] = diagSym
-    metrics["Row/Col Normalization Score"] = normScore
-    metrics["My method size weighted latency"] = diffSumLatency
-    metrics["Grid plus size weighted latency"] = gridPlusSumLatency
-
+    metrics["Diagonal Symmetry Score"] = float(diagSym) 
+    metrics["Row/Col Normalization Score"] = float(normScore)
+    metrics["My method size weighted latency"] = float(diffSumLatency)# / totalDemand)
+    metrics["Grid plus size weighted latency"] = float(gridPlusSumLatency)# / totalDemand)
+    metrics["Motif size weighted latency"] = float(motifSumLatency)# / totalDemand)
     writer.close()
 
     # Save the dictionary to a file, if we give a proper name 
@@ -357,8 +406,9 @@ def run_simulation(numFlows,
             json.dump(metrics, f)
     else:
         print("No file name given, metrics not saved, here they are:")
-        print("Diff Method: "+str(diffSumLatency))
-        print("Grid plus: "+str(gridPlusSumLatency))
+        print("Diff Method: "+str(diffSumLatency/ totalDemand))
+        print("Grid plus: "+str(gridPlusSumLatency/ totalDemand))
+        print("Motif: "+str(motifSumLatency/ totalDemand))
 
     #Plots 
     #myUtils.plot_connectivity(positions, c, figsize=(8,8))
@@ -413,7 +463,7 @@ def run_main():
     parser.add_argument('--numFlows', type=int, default=30, help='Number of flows')
     parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
     parser.add_argument('--numSatellites', type=int, default=100, help='Number of satellites')
-    parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
+    parser.add_argument('--orbitalPlanes', type=int, default=25, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')

@@ -725,7 +725,7 @@ def size_weighted_latency_matrix(connectivity_matrix, traffic_matrix):
     return size_weighted_latency
 
 
-def plot_connectivity(positions: np.ndarray, C: np.ndarray, figsize=(8,8)):
+def plot_connectivity(positions: np.ndarray, C: np.ndarray, figsize=(8,8), title_text = ": D"):
     """
     Plot satellites as points and ISL links as lines in 3D.
 
@@ -741,7 +741,7 @@ def plot_connectivity(positions: np.ndarray, C: np.ndarray, figsize=(8,8)):
 
     # Plot satellites
     xs, ys, zs = positions[:,0], positions[:,1], positions[:,2]
-    ax.scatter(xs, ys, zs, s=20, color='blue', label='Satellites')
+    ax.scatter(xs, ys, zs, s=20, color='blue') #, label='Satellites')
 
     # Plot links
     N = positions.shape[0]
@@ -758,9 +758,15 @@ def plot_connectivity(positions: np.ndarray, C: np.ndarray, figsize=(8,8)):
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title('Walker-Δ Constellation +‑Grid Connectivity')
+    #ax.set_title('Walker-Δ Constellation +‑Grid Connectivity')
     ax.legend()
     plt.tight_layout()
+
+    #additional mods 
+    ax.axis('off')
+    ax.set_title(title_text, fontsize=20) 
+    ax.grid(False)
+
     plt.show()
 
 # def harden_routing(R):
@@ -964,3 +970,115 @@ def differentiable_floyd_warshall(weights_matrix: torch.Tensor, beta: float = 1.
         distances.fill_diagonal_(0.0)
 
     return distances
+
+def create_individual_param_reset_method(params_and_optimizers, epochs_to_track=3):
+    """
+    Creates methods to manage and reset specific nn.Parameter(s) and their optimizers
+    to either a state 'epochs_to_track' epochs ago or to the overall best-performing state.
+
+    Args:
+        params_and_optimizers (list): A list of tuples, where each tuple is
+                                      (parameter_tensor, optimizer_for_that_parameter).
+                                      e.g., [(connectivity_logits, connOpt), (routing_logits, routeOpt)]
+        epochs_to_track (int): The number of epochs to remember for rollback functionality.
+    """
+    state_history = {}
+    best_loss_so_far = float('inf')
+    best_state_info = None
+
+    def update_state_history(current_epoch, current_loss):
+        nonlocal best_loss_so_far, best_state_info
+
+        current_states_snapshot = []
+        for param, opt in params_and_optimizers:
+            if param is not None and opt is not None:
+                current_states_snapshot.append({
+                    'param_state': param.data.clone(),
+                    'optimizer_state': copy.deepcopy(opt.state_dict()) # Crucial deep copy
+                })
+            else:
+                current_states_snapshot.append(None)
+
+        state_history[current_epoch] = current_states_snapshot
+
+        if len(state_history) > epochs_to_track + 2:
+            oldest_epoch = min(state_history.keys())
+            del state_history[oldest_epoch]
+
+        if current_loss < best_loss_so_far:
+            print(f"    --- New best loss found: {current_loss:.4f} (Epoch {current_epoch}) ---")
+            best_loss_so_far = current_loss
+            best_state_info = copy.deepcopy(current_states_snapshot) # Crucial deep copy
+
+    def reset_to_previous_state(current_epoch):
+        
+        reset_epoch = current_epoch - epochs_to_track - 1
+
+        if reset_epoch >= 0 and reset_epoch in state_history.keys():
+            saved_states = state_history[reset_epoch]
+            for i, (param, opt) in enumerate(params_and_optimizers):
+                if param is not None and opt is not None and saved_states[i] is not None:
+                    param.data.copy_(saved_states[i]['param_state'])
+                    opt.load_state_dict(saved_states[i]['optimizer_state'])
+                    # We'll use a .name attribute for cleaner printouts in this test
+                    param_name = getattr(param, 'name', f"Parameter {i}")
+                    print(f"    - Parameter '{param_name}' and its optimizer reset to state from epoch {reset_epoch}")
+                elif param is not None and opt is not None:
+                    param_name = getattr(param, 'name', f"Parameter {i}")
+                    print(f"    - WARNING: State for '{param_name}' at epoch {reset_epoch} was not saved or is inactive.")
+            print(f"All active parameters and optimizers reset to state from epoch {reset_epoch}")
+        else:
+            print(f"No saved state for epoch {reset_epoch} to reset to.")
+
+    def reset_to_best_state():
+        if best_state_info is not None:
+            print(f"\n--- Resetting to best state with loss: {best_loss_so_far:.4f} ---")
+            for i, (param, opt) in enumerate(params_and_optimizers):
+                if param is not None and opt is not None and best_state_info[i] is not None:
+                    param.data.copy_(best_state_info[i]['param_state'])
+                    opt.load_state_dict(best_state_info[i]['optimizer_state'])
+                    param_name = getattr(param, 'name', f"Parameter {i}")
+                    print(f"    - Parameter '{param_name}' and its optimizer reset to best state.")
+                elif param is not None and opt is not None:
+                    param_name = getattr(param, 'name', f"Parameter {i}")
+                    print(f"    - WARNING: Best state for '{param_name}' was not saved or is inactive.")
+            print("--- Reset to best state complete ---\n")
+        else:
+            print("No best state recorded yet to reset to.")
+
+    def find_closest_logit_history(target_logit_set):
+
+        min_total_distance = float('inf')
+        closest_epoch = None
+
+        #for each epoch 
+        for epoch_in_history, saved_states_snapshot in state_history.items():
+            current_total_distance = 0.0
+            
+            #'optimizer_state':
+            for i, (param_info, target_logit) in enumerate(saved_states_snapshot):
+                if param_info is not None and target_logit is not None:
+                    saved_param_data = param_info['param_state']
+                    
+                    if saved_param_data.shape != target_logit_set.shape:
+                        current_total_distance = float('inf')
+                        break
+                    
+                    distance = torch.dist(saved_param_data, target_logit_set, p=2)
+                    current_total_distance += distance.item()
+                elif param_info is None and target_logit is not None:
+                    current_total_distance = float('inf')
+                    break
+
+            if current_total_distance < min_total_distance:
+                min_total_distance = current_total_distance
+                closest_epoch = epoch_in_history
+        
+        return closest_epoch, min_total_distance
+
+
+    return update_state_history, reset_to_previous_state, reset_to_best_state, find_closest_logit_history
+
+# The rest of your run_simulation function remains the same.
+# Ensure that `myUtils` is correctly imported and `Baselines.funcedBaseline`
+# (or the relevant functions from it) are accessible.
