@@ -11,10 +11,6 @@ import json
 import argparse
 from Baselines.funcedBaseline import *
 
-
-
-
-
 def run_simulation(numFlows, 
                    numSatellites, 
                    orbitalPlanes, 
@@ -23,8 +19,6 @@ def run_simulation(numFlows,
                    lr, 
                    fileToSaveTo,
                    metricToOptimize = "latency"):
-
-  
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
     # This is the first and most important change: define the device (GPU or CPU)   
@@ -86,13 +80,14 @@ def run_simulation(numFlows,
     available   = np.setdiff1d(np.arange(numSatellites), src_indices)
     dst_indices = np.random.choice(available, size=numFlows, replace=False)
 
-    great_circle_prop = myUtils.great_circle_distance_matrix_cartesian(positions, 6.946e6) / (3e8)
-    #great_circle_prop = torch.from_numpy(great_circle_prop).to(dtype=torch.float32).to(device) # NEW
 
     # per (s,d) demand
     demandVals = torch.rand(numFlows)*trafficScaling
     demands = { (int(s),int(d)): demandVals[i]
                 for i,(s,d) in enumerate(zip(src_indices, dst_indices)) }
+
+    great_circle_prop = myUtils.great_circle_distance_matrix_cartesian(positions, 6.946e6) / (3e8)
+    #great_circle_prop = torch.from_numpy(great_circle_prop).to(dtype=torch.float32).to(device) # NEW
 
     # ─── 3) Precompute one-hop distances & adjacencies ─────────────────────────────
     dmat = torch.cdist(torch.from_numpy(positions).to(dtype=torch.float32), torch.from_numpy(positions).to(dtype=torch.float32))  / 3e8                            # [N,N]
@@ -157,7 +152,6 @@ def run_simulation(numFlows,
         #Remove gradients 
         connOpt.zero_grad()
         
-
         # Implement logit normalization 
         # This converts our logits to valid values in the context of beam allocations 
         # it might possibly remove....the beam restrictions
@@ -228,12 +222,12 @@ def run_simulation(numFlows,
             denom = numer.sum(dim=2, keepdim=True)    # [i,d,1]
             Rsub = numer / (denom + 1e-15)                # [i,d,i]
 
+            #index placement is: currr x dst x next 
             R = torch.zeros([numSatellites,numSatellites,numSatellites], dtype=torch.float)
             R[:,dst_indices,:] = Rsub
 
             #within routing matrix, zero out outgoing edges for when we are at our destination 
             R[dst_indices, dst_indices, :] = 0
-
 
         # #sharpen routing components:
         #R = R ** (gamma)
@@ -247,18 +241,34 @@ def run_simulation(numFlows,
         T_current = torch.zeros((numSatellites, numSatellites))
         #initialize it the src_indices as the actual demand vals 
         T_current[dst_indices, src_indices] = demandVals
+
         totalDemand = torch.sum(demandVals).detach().numpy()
         T_store = copy.deepcopy(T_current)
+
+        #compute penalty scaling
+        if(metricToOptimize == "hops"):
+            #compute sphere surface area 
+            surfaceArea = 4*math.pi*orbitRadius ** 2
+            avgDistBetweenPoints = surfaceArea / numSatellites
 
         #hoppity hop 
         for _ in range(max_hops):
 
             # Compute traffic sent: traffic[d, i] * R[i, d, j] → output: [d, i, j]
             # Need to broadcast T_current to [d, i, 1] to match R[i, d, j]
+
+            #this is done as every routing portion for "next hop"
+            #uses the same "traffic state" with regards to a specific destination
+            #broadcasting : repeat element entry for multiple multiplications 
             traffic_sent = T_current[:, :, None] * R.permute(1, 0, 2)  # [d, i, j]
 
+            #pdb.set_trace()
+
             # Compute latency for all traffic
-            scaledDist = dmat / (c + 1e-6)
+            if(metricToOptimize == "latency"):
+                scaledDist = dmat / (c + 1e-6)
+            if(metricToOptimize == "hops"):
+                scaledDist = dmat / (dmat + 1e-6)
 
             #compute one hop 
             latency = torch.einsum('dij,ij->', traffic_sent, scaledDist)  # Scalar
@@ -289,7 +299,11 @@ def run_simulation(numFlows,
                 stuck_traffic = T_current * stuck_mask  # [d, i]
 
                 # Apply penalty for stuck traffic, scaled on ending distance 
-                stuck_penalty = (stuck_traffic * great_circle_prop ).sum() * penalty_per_unit
+                if(metricToOptimize == "latency"):
+                    stuck_penalty = (stuck_traffic * great_circle_prop ).sum() * penalty_per_unit
+                # If we are optimizing hops, then normalize with respect to that 
+                if(metricToOptimize == "hops"):
+                    stuck_penalty = (stuck_traffic * great_circle_prop / avgDistBetweenPoints ).sum() * penalty_per_unit
 
                 #stuck_penalty = stuck_traffic.sum() * penalty_per_unit
                 total_latency += stuck_penalty
@@ -341,6 +355,10 @@ def run_simulation(numFlows,
         
     # ─── Finish up ─────────────────────────────────────────────────────────────────
 
+    #if we are optimizing hop count, then normalize distance matrix 
+    if(metricToOptimize == "hops"):
+        dmat = dmat/dmat 
+
     #Create Metrics
     diagSym = myUtils.diagonal_symmetry_score(c).detach().numpy()
     normScore = myUtils.normalization_score(c, ref=4.0, epsilon=1e-8).detach().numpy()
@@ -376,7 +394,10 @@ def run_simulation(numFlows,
     gridPlusLatencyMat = myUtils.size_weighted_latency_matrix(gridPlusProp, T_store)
     gridPlusSumLatency = np.sum(gridPlusLatencyMat)
 
-    motifSumLatency = calculate_weighted_latency(
+    #plot grid+ baseline 
+    #myUtils.plot_connectivity(positions, gridPlusConn, figsize=(8,8))
+
+    motifSumLatency, graph = calculate_min_metric(
         1,
         numSatellites,
         orbitalPlanes,
@@ -387,9 +408,14 @@ def run_simulation(numFlows,
         src_indices,
         dst_indices,
         demandVals,
-        False
+        False,
+        metricToOptimize
     ) 
 
+    #convert graph to valid conn components 
+    node_positions, conn = myUtils.graph_to_matrix_representation(graph)
+    #plot motif baseline 
+    #myUtils.plot_connectivity(node_positions, conn, figsize=(8,8))
 
     #save all metrics to dictionary
     metrics = {}
@@ -398,6 +424,8 @@ def run_simulation(numFlows,
     metrics["My method size weighted latency"] = float(diffSumLatency)# / totalDemand)
     metrics["Grid plus size weighted latency"] = float(gridPlusSumLatency)# / totalDemand)
     metrics["Motif size weighted latency"] = float(motifSumLatency)# / totalDemand)
+    metrics["Total Demand"] = float(totalDemand)
+
     writer.close()
 
     # Save the dictionary to a file, if we give a proper name 
@@ -410,8 +438,9 @@ def run_simulation(numFlows,
         print("Grid plus: "+str(gridPlusSumLatency/ totalDemand))
         print("Motif: "+str(motifSumLatency/ totalDemand))
 
-    #Plots 
+    #Plots for diff method 
     #myUtils.plot_connectivity(positions, c, figsize=(8,8))
+
     # plt.hist(originalC.detach().numpy(), bins=20, range=(0, 1), edgecolor='black')
     # plt.show()
     # R = R[R>0.01]
@@ -460,13 +489,14 @@ def run_simulation(numFlows,
     
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
-    parser.add_argument('--numFlows', type=int, default=30, help='Number of flows')
-    parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
-    parser.add_argument('--numSatellites', type=int, default=100, help='Number of satellites')
-    parser.add_argument('--orbitalPlanes', type=int, default=25, help='Number of orbital planes')
+    parser.add_argument('--numFlows', type=int, default=10, help='Number of flows')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('--numSatellites', type=int, default=30, help='Number of satellites')
+    parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
+    parser.add_argument('--lr', type=float, default=0.03, help='Learning rate')
     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')
+    parser.add_argument('--metricToOptimize', type=str, default="hops", choices=['latency','hops'])
 
     args = parser.parse_args()
 
@@ -477,7 +507,8 @@ def run_main():
                    args.routingMethod,      
                    args.epochs,              
                    args.lr,
-                   args.fileName)
+                   args.fileName,
+                   args.metricToOptimize)
 
 if __name__ == '__main__':
     run_main()

@@ -3,6 +3,7 @@ from walkerDeltaTopologyOptimization import run_simulation
 
 import time
 from datetime import datetime, timedelta
+import myUtils
 
 def pause_then_run(delay_seconds=3600, task=None):
     """Pauses for a given time and then runs a task (if provided)."""
@@ -21,21 +22,35 @@ inputs = {
     'numSatellites': 360, 
     'orbitalPlanes': 15, 
     'routingMethod': 'LOSweight',
-    'epochs': 200, #200
+    'epochs': 50, #200
     'lr': 0.030, #.03
-    'fileToSaveTo': "RoutingLogitsSmallConst"
+    'fileToSaveTo': "RoutingLogitsSmallConst",
+    'metricToOptimize': "hops"
 } 
 
+#360, 24 
 #thought: we might have been using LearnedLogits for this.... nah that was before .
 
 #then, iterate over and modify inputs  
 for i in range(1,11): 
-    #generate and modify non default params 
-    print("Iteration # : " + str(i))
-    numFlows = i * 15
-    inputs['numFlows'] = numFlows
-    inputs['fileToSaveTo'] = "Data/" + "RoutingLogitsSmallConst" + str(numFlows)
+    #store numSatellites 
+    numSatellites = 40*i 
 
+    #get # orbital planes 
+    numPlanes = myUtils.find_closest_divisor_to_sqrt(numSatellites)
+
+    #get # flows
+    numFlows = int(numSatellites / 3)
+
+    #update inputs 
+    inputs['numSatellites'] = numSatellites
+    inputs['orbitalPlanes'] = numPlanes
+    inputs['numFlows'] = numFlows
+    inputs['fileToSaveTo'] = "Data/" + "VariableConstHops" + str(numSatellites)
+
+    #create debug 
+    print("Iteration # : " + str(i))
+    
     #run the function for generating the simulation <3 
     run_simulation(**inputs)
 

@@ -227,7 +227,9 @@ def compute_metric_avoid_city(grph, city_pairs, city_coverage, flow_pops):
 
             weightSum += weight
             weightedStretchSum += stretch * weight
-            weightedHopCountSum += hops * weight
+
+            #weightedHopCountSum += hops * weight
+            weightedHopCountSum += hops * flow_pops[i]
 
             weightedLatency += distance * flow_pops[i] / (3e8)
 
@@ -240,7 +242,9 @@ def compute_metric_avoid_city(grph, city_pairs, city_coverage, flow_pops):
                 "avgWeightedStretch": 99999.0,
                 "avgWeightedHopCount": 99999.0,
                 "wMetric": 99999.0,
-                "weightedLatency": np.inf
+                "weightedLatency": np.inf,
+                "weightedHopCountSum": np.inf,
+                "linkedGraph" : grph
             }
             return return_val
     avgWeightedStretch = weightedStretchSum / weightSum
@@ -255,8 +259,9 @@ def compute_metric_avoid_city(grph, city_pairs, city_coverage, flow_pops):
         "avgWeightedStretch": avgWeightedStretch,
         "avgWeightedHopCount": avgWeightedHopCount,
         "wMetric": wMetric,
-        "weightedLatency": weightedLatency
-
+        "weightedLatency": weightedLatency,
+        "weightedHopCountSum": weightedHopCountSum,
+        "linkedGraph" : grph
     }
     return return_val
 
@@ -277,10 +282,13 @@ def run_motif_analysis(grph, motif_cnt, motif, return_dict, sat_positions, NUM_O
     motif["wStretch"] = retVal["avgWeightedStretch"]
     motif["wHop"] = retVal["avgWeightedHopCount"]
     motif["weightedLatency"] = retVal["weightedLatency"]
+    motif["weightedHopCountSum"] = retVal["weightedHopCountSum"]
+    motif["linkedGraph"] = retVal["linkedGraph"]
+
 
     return_dict[motif_cnt] = motif
 
-def calculate_weighted_latency(
+def calculate_min_metric(
         CORE_CNT: int,
         numSatellites: int = 200,
         NUM_ORBITS: int = 20,
@@ -291,7 +299,8 @@ def calculate_weighted_latency(
         src_inds: [] = [],
         dst_inds: [] = [],
         demandVals: [] = [],
-        multiProcessed = True
+        multiProcessed = True,
+        minMetric = "latency"
     ) -> float:
     """
     Calculates the weighted latency for a satellite constellation based on various parameters.
@@ -350,7 +359,7 @@ def calculate_weighted_latency(
     G = nx.Graph()
 
     for i in range(len(city_positions)):
-        G.add_node(city_coverage[i]["city"])
+        G.add_node(city_coverage[i]["city"], pos = city_positions[i])
 
     manager = Manager()
     return_dict = manager.dict()
@@ -384,8 +393,24 @@ def calculate_weighted_latency(
         valid_motif_possibilities[value["motif_cnt"]]["wStretch"] = value["wStretch"]
         valid_motif_possibilities[value["motif_cnt"]]["wHop"] = value["wHop"]
         valid_motif_possibilities[value["motif_cnt"]]["weightedLatency"] = value["weightedLatency"]
+        valid_motif_possibilities[value["motif_cnt"]]["linkedGraph"] = value["linkedGraph"]
+        valid_motif_possibilities[value["motif_cnt"]]["weightedHopCountSum"] = value["weightedHopCountSum"]
+    
+    #min_motif_dict = min(valid_motif_possibilities.values(), key=lambda x: x['weightedLatency'])
 
-    return (min([x['weightedLatency'] for x in valid_motif_possibilities.values()]))
+    if(minMetric == "latency"):
+        min_motif_dict = min(valid_motif_possibilities.values(), key=lambda x: x['weightedLatency'])
+
+        return min_motif_dict['weightedLatency'], min_motif_dict['linkedGraph']
+
+    if(minMetric == "hops"):
+        min_motif_dict = min(valid_motif_possibilities.values(), key=lambda x: x['weightedHopCountSum'])
+        #weightedHopCountSum = min_motif_dict['weightedHopCountSum']
+
+        return min_motif_dict['weightedHopCountSum'], min_motif_dict['linkedGraph']
+    
+    return None
+    
     best_motif = util.get_best_motif_at_level(valid_motif_possibilities)
 
     return best_motif['weightedLatency']

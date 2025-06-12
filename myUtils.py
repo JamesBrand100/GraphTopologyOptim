@@ -39,7 +39,7 @@ import torch
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from math import radians, sin, cos, sqrt, atan2
-
+import networkx as nx
 def generateWalkerStarConstellationPoints(
         numSatellites,
         inclination,
@@ -1079,6 +1079,96 @@ def create_individual_param_reset_method(params_and_optimizers, epochs_to_track=
 
     return update_state_history, reset_to_previous_state, reset_to_best_state, find_closest_logit_history
 
+def graph_to_matrix_representation(graph: nx.Graph) -> tuple[dict, np.ndarray]:
+
+    if not graph.nodes:
+        return {}, np.array([])
+
+    # 1. Extract Node Positions
+    node_positions = {}
+    
+    # Check if all nodes have 'pos' attribute and determine dimension
+    first_node_id = list(graph.nodes())[0]
+    if 'pos' not in graph.nodes[first_node_id]:
+        raise ValueError("All nodes must have a 'pos' attribute for position extraction.")
+    
+    pos_dimension = len(graph.nodes[first_node_id]['pos'])
+
+    for node_id in sorted(graph.nodes()): # Sort to ensure consistent matrix indexing
+        pos = graph.nodes[node_id].get('pos')
+        if pos is None:
+            raise ValueError(f"Node {node_id} does not have a 'pos' attribute.")
+        if len(pos) != pos_dimension:
+            raise ValueError(f"Node {node_id} has position of dimension {len(pos)}, expected {pos_dimension}.")
+        node_positions[node_id] = np.array(pos) # Store as numpy array for consistency
+
+    hold =  [node_positions[ind] for ind in node_positions.keys()]
+    hold_positions = np.vstack(hold)
+
+    # 2. Create Connectivity / Edge Presence Matrix (Adjacency Matrix)
+    num_nodes = graph.number_of_nodes()
+    # Create a mapping from node ID to sorted index for matrix
+    node_to_idx = {node_id: idx for idx, node_id in enumerate(sorted(graph.nodes()))}
+    
+    adjacency_matrix = np.zeros((num_nodes, num_nodes), dtype=int)
+
+    for u, v in graph.edges():
+        idx_u = node_to_idx[u]
+        idx_v = node_to_idx[v]
+        adjacency_matrix[idx_u, idx_v] = 1
+        adjacency_matrix[idx_v, idx_u] = 1 # Assuming undirected graph
+
+    return hold_positions, adjacency_matrix
+
 # The rest of your run_simulation function remains the same.
 # Ensure that `myUtils` is correctly imported and `Baselines.funcedBaseline`
 # (or the relevant functions from it) are accessible.
+
+
+import math
+
+def find_closest_divisor_to_sqrt(num_satellites: int) -> int:
+    """
+    Finds a divisor of num_satellites that is closest to its integer square root.
+
+    Args:
+        num_satellites (int): The number for which to find the divisor.
+                              Must be a positive integer.
+
+    Returns:
+        int: The divisor of num_satellites that is closest to its integer square root.
+             If there are two divisors equidistant from the integer square root,
+             the smaller of the two is returned.
+
+    Raises:
+        ValueError: If num_satellites is not a positive integer.
+    """
+    if not isinstance(num_satellites, int) or num_satellites < 1:
+        raise ValueError("num_satellites must be a positive integer.")
+
+    # Handle the trivial case where num_satellites is 1
+    if num_satellites == 1:
+        return 1
+
+    # Calculate the integer part of the square root
+    target_sqrt = int(math.sqrt(num_satellites))
+
+    # Iterate downwards from the target_sqrt to find a divisor
+    # We look for the first divisor 'i' because its pair (num_satellites // i)
+    # will be the 'other' divisor. These two divisors (i and num_satellites // i)
+    # are the most likely candidates to be closest to the square root.
+    for i in range(target_sqrt, 0, -1):
+        if num_satellites % i == 0:
+            divisor1 = i
+            divisor2 = num_satellites // i
+
+            # Compare which of the two divisors is closer to the original target_sqrt
+            # If distances are equal, prefer the smaller divisor (divisor1)
+            if abs(divisor1 - target_sqrt) <= abs(divisor2 - target_sqrt):
+                return divisor1
+            else:
+                return divisor2
+
+    # This part of the code should theoretically never be reached for num_satellites >= 1
+    # as 1 is always a divisor, and the loop goes down to 1.
+    return 1 # Fallback, though not expected to be hit
