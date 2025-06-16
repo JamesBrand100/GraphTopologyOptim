@@ -5,6 +5,7 @@ from scipy.spatial import KDTree, cKDTree
 from scipy.spatial.distance import cdist
 from scipy.optimize import minimize
 from scipy.integrate import quad
+import matplotlib.cm as cm # Import colormap module
 
 # Geospatial tools
 import healpy as hp
@@ -694,6 +695,68 @@ def FW(connectivity_matrix):
 
     return distance_matrix
 
+def size_weighted_latency_matrix_networkx(connectivity_matrix: np.ndarray, traffic_matrix: np.ndarray):
+    """
+    Computes the size-weighted latency matrix based on connectivity and traffic,
+    leveraging NetworkX's Dijkstra's algorithm. This is more efficient than
+    Floyd-Warshall when the traffic matrix is sparse.
+
+    Args:
+        connectivity_matrix (numpy.ndarray): A square matrix representing the
+            connectivity or one-hop latency between nodes. A value of infinity
+            (np.inf) indicates no direct connection. Edge weights should be
+            non-negative for Dijkstra's.
+        traffic_matrix (numpy.ndarray): A square matrix representing the traffic
+            demand between each source-destination pair.
+
+    Returns:
+        numpy.ndarray: A square matrix representing the size-weighted latency
+        between each source-destination pair.
+    """
+    num_nodes = connectivity_matrix.shape[0]
+
+    # Initialize the distance matrix with infinity for all pairs
+    distance_matrix = np.full((num_nodes, num_nodes), np.inf)
+
+    # Create a NetworkX graph from the connectivity matrix
+    # We'll use a DiGraph because traffic might not flow symmetrically or costs might differ
+    G = nx.DiGraph()
+    for i in range(num_nodes):
+        G.add_node(i)
+    
+    # Add edges to the graph where there's a connection (not infinity)
+    # The weight of the edge is the latency from the connectivity_matrix
+    for i in range(num_nodes):
+        for j in range(num_nodes):
+            if connectivity_matrix[i, j] != np.inf and i != j: # Exclude self-loops from edges, though FW handles 0
+                G.add_edge(i, j, weight=connectivity_matrix[i, j])
+
+    # Identify unique source nodes with non-zero traffic
+    # np.any(traffic_matrix, axis=1) returns a boolean array where True means the row has at least one non-zero
+    # np.where gets the indices of these rows (source nodes)
+    active_sources = np.where(np.any(traffic_matrix != 0, axis=1))[0]
+
+    # If traffic_matrix[i,j] != 0 implies traffic *from* i *to* j,
+    # then we only need to run Dijkstra from source nodes 'i' where traffic_matrix[i,:] has non-zero entries.
+    for source_node in active_sources:
+        # Run Dijkstra's algorithm from the current source node
+        # Returns a dictionary where keys are destinations and values are shortest path lengths
+        shortest_paths_from_source = nx.single_source_dijkstra_path_length(G, source_node, weight='weight')
+        
+        # Populate the row in our distance_matrix
+        for dest_node, dist in shortest_paths_from_source.items():
+            distance_matrix[source_node, dest_node] = dist
+            
+    # For self-loops (traffic from node to itself), distance is 0
+    np.fill_diagonal(distance_matrix, 0) # Assumes latency from node to itself is 0
+
+
+    # Element-wise multiplication of shortest path latency and traffic matrices
+    # If a path was unreachable (still np.inf in distance_matrix), the weighted latency will also be np.inf
+    size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
+
+    return size_weighted_latency
+
 def size_weighted_latency_matrix(connectivity_matrix, traffic_matrix):
     """
     Computes the size-weighted latency matrix based on connectivity and traffic.
@@ -724,8 +787,182 @@ def size_weighted_latency_matrix(connectivity_matrix, traffic_matrix):
 
     return size_weighted_latency
 
+def calculate_network_metrics(connectivity_matrix: np.ndarray, traffic_matrix: np.ndarray):
+    """
+    Computes size-weighted latency and link utilization based on Floyd-Warshall
+    shortest path routing.
 
-def plot_connectivity(positions: np.ndarray, C: np.ndarray, figsize=(8,8), title_text = ": D"):
+    Args:
+        connectivity_matrix (np.ndarray): A square matrix where connectivity_matrix[i,j]
+            is the direct latency (cost) of the link from i to j.
+            Use np.inf for no direct connection.
+            Note: For standard shortest path, costs should be non-negative.
+        traffic_matrix (np.ndarray): A square matrix where traffic_matrix[i,j]
+            is the traffic demand from source i to destination j.
+
+    Returns:
+        tuple:
+            - size_weighted_latency (np.ndarray): A square matrix representing
+              the total latency for traffic between each source-destination pair.
+              (latency * traffic).
+            - link_utilization (np.ndarray): A square matrix where link_utilization[i,j]
+              is the total traffic passing through the link from i to j.
+    """
+    num_nodes = connectivity_matrix.shape[0]
+    
+    # Initialize distance matrix with direct latencies
+    distance_matrix = np.copy(connectivity_matrix)
+    
+    # Initialize next_hop matrix for path reconstruction
+    # next_hop[i, j] stores the next node after i on the shortest path to j.
+    # Initialize next_hop[i, j] = j if there's a direct connection, else -1 or num_nodes for no path
+    next_hop = np.full((num_nodes, num_nodes), -1, dtype=int)
+    for i in range(num_nodes):
+        for j in range(num_nodes):
+            if i == j:
+                next_hop[i, j] = i # Or some indicator that it's the destination
+            elif connectivity_matrix[i, j] != np.inf:
+                next_hop[i, j] = j # Direct connection, next hop is the destination
+
+    # --- Floyd-Warshall Algorithm with Path Reconstruction ---
+    for k in range(num_nodes):
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                if distance_matrix[i, k] != np.inf and distance_matrix[k, j] != np.inf:
+                    if distance_matrix[i, k] + distance_matrix[k, j] < distance_matrix[i, j]:
+                        distance_matrix[i, j] = distance_matrix[i, k] + distance_matrix[k, j]
+                        next_hop[i, j] = next_hop[i, k] # The next hop from i to j is now the next hop from i to k
+
+    # --- Calculate Link Utilization ---
+    link_utilization = np.zeros((num_nodes, num_nodes), dtype=float)
+
+    for src in range(num_nodes):
+        for dest in range(num_nodes):
+            if src == dest:
+                continue # No traffic for self-loops in this context
+
+            traffic = traffic_matrix[src, dest]
+            if traffic > 0 and distance_matrix[src, dest] != np.inf: # Only consider if there's traffic and a path
+                current_node = src
+                # Reconstruct path and add traffic to links
+                path_hops = 0 # To track hops and prevent infinite loops on invalid graphs
+                while current_node != dest and path_hops < num_nodes: # Path can have at most V-1 hops in simple path
+                    next_node = next_hop[current_node, dest]
+                    if next_node == -1: # No path found, break
+                        break
+                    
+                    link_utilization[current_node, next_node] += traffic
+                    current_node = next_node
+                    path_hops += 1
+                
+                # If path_hops reached num_nodes, it implies a loop or error in reconstruction for this path
+                # This check helps debug if paths aren't forming correctly or graph has issues
+                if current_node != dest and path_hops == num_nodes:
+                    print(f"Warning: Path from {src} to {dest} exceeded max hops ({num_nodes}) during reconstruction. Likely a path issue or loop.")
+
+
+    # --- Calculate Size-Weighted Latency ---
+    # Element-wise multiplication of shortest path latency and traffic matrices
+    # Paths that are np.inf (no connection) will result in np.inf weighted latency
+    size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
+
+    return size_weighted_latency, link_utilization, next_hop # Also returning next_hop for potential R_i,j,d insight
+
+
+def plot_connectivity(positions: np.ndarray, C: np.ndarray, utilization: np.ndarray = None, figsize=(8,8), title_text = ": D"):
+    """
+    Plot satellites as points and ISL links as lines in 3D.
+    Link colors vary by utilization if provided; otherwise, they default to gray.
+
+    Parameters
+    ----------
+    positions : np.ndarray, shape (N,3)
+        Cartesian coordinates of each satellite.
+    C : np.ndarray, shape (N,N), dtype=bool or 0/1
+        Connectivity matrix: C[i,j]=True/1 if there is a link between i and j.
+    utilization : np.ndarray, shape (N,N), optional
+        Utilization matrix: utilization[i,j] denotes the utilization of link (i,j).
+        Higher values mean higher utilization. If None, links will be gray.
+        The default is None.
+    figsize : tuple, optional
+        Figure size. The default is (8,8).
+    title_text : str, optional
+        Title for the plot. The default is ": D".
+    """
+    fig = plt.figure(figsize=figsize)
+    ax  = fig.add_subplot(111, projection='3d')
+
+    # Plot satellites
+    xs, ys, zs = positions[:,0], positions[:,1], positions[:,2]
+    ax.scatter(xs, ys, zs, s=20, color='blue', label='Satellites')
+
+    # Determine if utilization coloring should be applied
+    use_utilization_coloring = utilization is not None and np.any(C) and np.any(utilization[C])
+
+    if use_utilization_coloring:
+        # Normalize utilization values only for existing links
+        # Create a masked array or set non-connected link utilization to 0 for normalization
+        # Or, just normalize over the values of existing links to avoid zeros from non-links skewing scale
+        active_util_values = utilization[C] # Get utilization values only for active links
+        
+        # Ensure there's at least one non-zero active utilization to avoid division by zero
+        if np.max(active_util_values) == 0:
+            use_utilization_coloring = False # Fallback to default if all active utilizations are zero
+        else:
+            normalized_utilization = active_util_values / np.max(active_util_values)
+            # Create a full normalized matrix for easier lookup during plotting
+            full_normalized_utilization = np.zeros_like(utilization, dtype=float)
+            full_normalized_utilization[C] = normalized_utilization # Apply normalized values back to C locations
+
+            cmap = cm.coolwarm
+            max_util_for_colorbar = np.max(active_util_values)
+    else:
+        # Default settings if utilization is not provided or all active links have zero utilization
+        link_default_color = 'gray'
+        link_default_linewidth = 0.5 # Restore original linewidth for default
+
+    # Plot links
+    N = positions.shape[0]
+    for i in range(N):
+        for j in range(i + 1, N): # To avoid plotting each link twice
+            if C[i, j]: # If a link exists
+                xline = [positions[i,0], positions[j,0]]
+                yline = [positions[i,1], positions[j,1]]
+                zline = [positions[i,2], positions[j,2]]
+
+                if use_utilization_coloring:
+                    # Get the normalized utilization for this link
+                    # Use the stored normalized value
+                    link_norm_util = full_normalized_utilization[i, j]
+                    link_color = cmap(link_norm_util)
+                    ax.plot(xline, yline, zline, color=link_color, linewidth=1.5)
+                else:
+                    ax.plot(xline, yline, zline, color=link_default_color, linewidth=link_default_linewidth)
+
+    # Styling
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    # No explicit legend for satellites if we're not using 'label' in scatter for color conflict
+    # ax.legend() # Re-add if you put label back and handle it
+
+    plt.tight_layout()
+
+    # Additional mods
+    ax.axis('off')
+    ax.set_title(title_text, fontsize=20)
+    ax.grid(False)
+
+    # Add a colorbar only if utilization coloring is applied
+    if use_utilization_coloring:
+        sm = cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max_util_for_colorbar))
+        sm.set_array([]) # Or set to original utilization values if you want it to be populated
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.5, aspect=10, pad=0.05)
+        cbar.set_label('Link Utilization', rotation=270, labelpad=15)
+
+    plt.show()
+
+def plot_connectivity_old(positions: np.ndarray, C: np.ndarray, figsize=(8,8), title_text = ": D"):
     """
     Plot satellites as points and ISL links as lines in 3D.
 
@@ -1172,3 +1409,33 @@ def find_closest_divisor_to_sqrt(num_satellites: int) -> int:
     # This part of the code should theoretically never be reached for num_satellites >= 1
     # as 1 is always a divisor, and the loop goes down to 1.
     return 1 # Fallback, though not expected to be hit
+
+
+def size_weighted_latency_matrix_networkx(connectivity_matrix: np.ndarray, traffic_matrix: np.ndarray):
+    num_nodes = connectivity_matrix.shape[0]
+
+    distance_matrix = np.full((num_nodes, num_nodes), np.inf)
+
+    G = nx.DiGraph()
+    for i in range(num_nodes):
+        G.add_node(i)
+    
+    for i in range(num_nodes):
+        for j in range(num_nodes):
+            if connectivity_matrix[i, j] != np.inf and i != j:
+                G.add_edge(i, j, weight=connectivity_matrix[i, j])
+
+    active_sources = np.where(np.any(traffic_matrix != 0, axis=1))[0]
+
+    for source_node in active_sources:
+        shortest_paths_from_source = nx.single_source_dijkstra_path_length(G, source_node, weight='weight')
+        for dest_node, dist in shortest_paths_from_source.items():
+            distance_matrix[source_node, dest_node] = dist
+            
+    np.fill_diagonal(distance_matrix, 0) # Distance from node to itself is 0
+
+    size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
+
+    size_weighted_latency[np.isnan(size_weighted_latency)] = 0 # Replace NaNs (from 0*inf) with 0
+
+    return [size_weighted_latency[traffic_matrix > 0]*traffic_matrix[traffic_matrix > 0]]

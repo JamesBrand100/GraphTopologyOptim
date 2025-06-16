@@ -18,7 +18,9 @@ def run_simulation(numFlows,
                    epochs, 
                    lr, 
                    fileToSaveTo,
-                   metricToOptimize = "latency"):
+                   metricToOptimize = "latency",
+                   demandDist = "random"):
+    #demand dist can be random or popBased
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
     # This is the first and most important change: define the device (GPU or CPU)   
@@ -39,10 +41,6 @@ def run_simulation(numFlows,
     torch.manual_seed(0)
 
     #training params
-    #we commented out the ones that are derived from user inputs 
-
-    #lr          = .01
-    #epochs      = 200 #40 epochs for very small constellation. more like ~100-150 epochs maybe for bigger constellation (~360 sats or somethin) 
     gamma       = 3.0      # sharpness for alignment
 
     #simulation params 
@@ -68,7 +66,8 @@ def run_simulation(numFlows,
     # every run goes under runs/<timestamp> by default
     writer = SummaryWriter(comment=f"_flows={numFlows}_gamma={gamma}")
 
-    # ─── 2) Create node positions and demands────────────────────────────────────────
+
+    """Create node positions and demands"""
     positions, vecs = myUtils.generateWalkerStarConstellationPoints(numSatellites,
                                                 inclination,
                                                 orbitalPlanes,
@@ -76,15 +75,65 @@ def run_simulation(numFlows,
                                                 orbitRadius)
     positions = np.reshape(positions, [np.shape(positions)[0]*np.shape(positions)[1], np.shape(positions)[2]])
 
-    src_indices = np.random.choice(np.arange(numSatellites), size=numFlows, replace=False)
-    available   = np.setdiff1d(np.arange(numSatellites), src_indices)
-    dst_indices = np.random.choice(available, size=numFlows, replace=False)
+    #if demand dist is random, treat it as such
+    if(demandDist == "random"):
+        src_indices = np.random.choice(np.arange(numSatellites), size=numFlows, replace=False)
+        available   = np.setdiff1d(np.arange(numSatellites), src_indices)
+        dst_indices = np.random.choice(available, size=numFlows, replace=False)
+
+        # per (s,d) demand
+        demandVals = torch.rand(numFlows)*trafficScaling
+        demands = { (int(s),int(d)): demandVals[i]
+                    for i,(s,d) in enumerate(zip(src_indices, dst_indices)) }
+        
+        # print(torch.max(demandVals))
+        # print(torch.sum(demandVals))
+
+        # pdb.set_trace()
 
 
-    # per (s,d) demand
-    demandVals = torch.rand(numFlows)*trafficScaling
-    demands = { (int(s),int(d)): demandVals[i]
-                for i,(s,d) in enumerate(zip(src_indices, dst_indices)) }
+    #otherwise, generate based on population
+    elif(demandDist == "popBased"):
+
+        #first, load in population and associated locations
+        res3GridLocations = np.load("Data/InitData/Res3Grid.npy") 
+        res3GridPops = np.load("Data/InitData/Res3Pops.npy") 
+
+        #then, assign population demands to each position 
+        #so, first get closest element of each res3GridLocations to satellite positions
+        res3Distances = np.linalg.norm(res3GridLocations[:, np.newaxis] - positions, axis=2)
+        closest_idx = np.argmin(res3Distances, axis=1)
+
+        #get argsum / closest satellite linked populations 
+        satellitePopulations = np.bincount(closest_idx, weights=res3GridPops)
+
+        #then, create corresponding flows 
+        distances = np.linalg.norm(positions[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=2)
+        population_products = np.outer(np.log(satellitePopulations + 1), np.log(satellitePopulations+ 1))
+        flows_matrix = np.zeros_like(distances, dtype=float)
+        flows_matrix = \
+            100 * population_products / \
+            (distances**0.001 + 10e-7)
+        flows_matrix[np.diag_indices(len(flows_matrix))] = 0 
+
+        #remove symmetry so one can be "sources," one can be "destination" 
+        flows_matrix = np.triu(flows_matrix)
+
+        #filter out flows that are too small
+        flat_data = flows_matrix.flatten()
+        percentile_value = np.percentile(flat_data, 96)
+        flows_matrix[flows_matrix < percentile_value] = 0
+            
+        #then, get source, dest, flow value components
+        src_indices, dst_indices = np.nonzero(flows_matrix)
+
+        # Use these indices to get the corresponding values from the matrix
+        demandVals = torch.from_numpy(flows_matrix[src_indices, dst_indices]).float()
+        
+        # print(torch.max(demandVals))
+        # print(torch.sum(demandVals))
+        
+        # pdb.set_trace()
 
     great_circle_prop = myUtils.great_circle_distance_matrix_cartesian(positions, 6.946e6) / (3e8)
     #great_circle_prop = torch.from_numpy(great_circle_prop).to(dtype=torch.float32).to(device) # NEW
@@ -380,7 +429,7 @@ def run_simulation(numFlows,
     #replace diagonal with 0 to prevent self loops
     np.fill_diagonal(diffMethodProp, 0)
     #compute latency 
-    diffMethodLatencyMat = myUtils.size_weighted_latency_matrix(diffMethodProp, T_store)
+    diffMethodLatencyMat = myUtils.size_weighted_latency_matrix_networkx(diffMethodProp, T_store)
     diffSumLatency = np.sum(diffMethodLatencyMat)
 
     #get baseline stuff next 
@@ -391,11 +440,15 @@ def run_simulation(numFlows,
     gridPlusProp = np.multiply(gridPlusConn, dmat )
     gridPlusProp[gridPlusProp == 0] = 1000
     np.fill_diagonal(gridPlusProp, 0)
-    gridPlusLatencyMat = myUtils.size_weighted_latency_matrix(gridPlusProp, T_store)
+    gridPlusLatencyMat = myUtils.size_weighted_latency_matrix_networkx(gridPlusProp, T_store)
     gridPlusSumLatency = np.sum(gridPlusLatencyMat)
 
     #plot grid+ baseline 
-    #myUtils.plot_connectivity(positions, gridPlusConn, figsize=(8,8))
+    print("Creating grid+ plot with metrics")
+    _, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
+    myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
+
+    #pdb.set_trace()
 
     motifSumLatency, graph = calculate_min_metric(
         1,
@@ -489,9 +542,9 @@ def run_simulation(numFlows,
     
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
-    parser.add_argument('--numFlows', type=int, default=10, help='Number of flows')
+    parser.add_argument('--numFlows', type=int, default=100, help='Number of flows')
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('--numSatellites', type=int, default=30, help='Number of satellites')
+    parser.add_argument('--numSatellites', type=int, default=200, help='Number of satellites')
     parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
     parser.add_argument('--lr', type=float, default=0.03, help='Learning rate')
