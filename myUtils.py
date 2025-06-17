@@ -18,7 +18,6 @@ import pylink
 
 # Linear and nonlinear programming
 import pulp
-from pyscipopt import Model, quicksum
 from scipy.special import xlogy
 import cvxpy as cp
 
@@ -41,6 +40,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from math import radians, sin, cos, sqrt, atan2
 import networkx as nx
+import matplotlib.colors as mcolors # Import for PowerNorm
+
 def generateWalkerStarConstellationPoints(
         numSatellites,
         inclination,
@@ -573,7 +574,6 @@ def build_full_logits_route_old(logits_feasible, feasible_indices, shape, dstInd
     print(len(feasible_indices[0]))
     print(len(feasible_indices[1]))
     print(len(dstIndices))
-    pdb.set_trace()
     full_logits[feasible_indices[0], dstIndices, feasible_indices[1]] = logits_feasible
     return full_logits
 
@@ -810,8 +810,10 @@ def calculate_network_metrics(connectivity_matrix: np.ndarray, traffic_matrix: n
     """
     num_nodes = connectivity_matrix.shape[0]
     
-    # Initialize distance matrix with direct latencies
-    distance_matrix = np.copy(connectivity_matrix)
+    # Initialize distance matrix based on connectivity matrix
+    distance_matrix = np.copy(connectivity_matrix).astype(float)
+    distance_matrix[~connectivity_matrix] = np.inf
+    np.fill_diagonal(distance_matrix, 0)
     
     # Initialize next_hop matrix for path reconstruction
     # next_hop[i, j] stores the next node after i on the shortest path to j.
@@ -821,7 +823,7 @@ def calculate_network_metrics(connectivity_matrix: np.ndarray, traffic_matrix: n
         for j in range(num_nodes):
             if i == j:
                 next_hop[i, j] = i # Or some indicator that it's the destination
-            elif connectivity_matrix[i, j] != np.inf:
+            elif distance_matrix[i, j] != np.inf:
                 next_hop[i, j] = j # Direct connection, next hop is the destination
 
     # --- Floyd-Warshall Algorithm with Path Reconstruction ---
@@ -869,13 +871,19 @@ def calculate_network_metrics(connectivity_matrix: np.ndarray, traffic_matrix: n
     return size_weighted_latency, link_utilization, next_hop # Also returning next_hop for potential R_i,j,d insight
 
 
-def plot_connectivity(positions: np.ndarray, C: np.ndarray, utilization: np.ndarray = None, figsize=(8,8), title_text = ": D"):
+def plot_connectivity(positions: np.ndarray, 
+                      C: np.ndarray, 
+                      utilization: np.ndarray = None, 
+                      figsize=(8,8), 
+                      title_text = ": D",  
+                      gamma_value = 0.4 ):
     """
     Plot satellites as points and ISL links as lines in 3D.
     Link colors vary by utilization if provided; otherwise, they default to gray.
 
     Parameters
     ----------
+    
     positions : np.ndarray, shape (N,3)
         Cartesian coordinates of each satellite.
     C : np.ndarray, shape (N,N), dtype=bool or 0/1
@@ -888,13 +896,24 @@ def plot_connectivity(positions: np.ndarray, C: np.ndarray, utilization: np.ndar
         Figure size. The default is (8,8).
     title_text : str, optional
         Title for the plot. The default is ": D".
+    gamma_value : float, optional
+        Gamma value for utilization coloring. Changes the effective mapping from link utilization to color for links
     """
+
+    active_util_values = utilization[C]
+    # n, bins , patches = plt.hist(active_util_values, bins=20, range=(0, np.max(active_util_values)), edgecolor='black')
+    # print(n)
+
+    # plt.show()
+
     fig = plt.figure(figsize=figsize)
     ax  = fig.add_subplot(111, projection='3d')
-
+    fig.set_facecolor('darkgrey') # Or any valid color string/hex code
+    ax.set_facecolor('darkgrey') # Or any valid color string/hex code
+    
     # Plot satellites
     xs, ys, zs = positions[:,0], positions[:,1], positions[:,2]
-    ax.scatter(xs, ys, zs, s=20, color='blue', label='Satellites')
+    ax.scatter(xs, ys, zs, s=7, color='blue', label='Satellites')
 
     # Determine if utilization coloring should be applied
     use_utilization_coloring = utilization is not None and np.any(C) and np.any(utilization[C])
@@ -909,13 +928,19 @@ def plot_connectivity(positions: np.ndarray, C: np.ndarray, utilization: np.ndar
         if np.max(active_util_values) == 0:
             use_utilization_coloring = False # Fallback to default if all active utilizations are zero
         else:
-            normalized_utilization = active_util_values / np.max(active_util_values)
+
+            #gamma_value = 0.4 # Experiment with this value (e.g., 0.1, 0.5)
+            norm = mcolors.PowerNorm(gamma=gamma_value, vmin=0, vmax=np.max(active_util_values))
+            cmap = cm.Reds
+
+            #normalized_utilization = active_util_values / np.max(active_util_values)
             # Create a full normalized matrix for easier lookup during plotting
             full_normalized_utilization = np.zeros_like(utilization, dtype=float)
-            full_normalized_utilization[C] = normalized_utilization # Apply normalized values back to C locations
+            full_normalized_utilization[C] = norm(active_util_values) # Apply normalized values back to C locations
 
-            cmap = cm.coolwarm
             max_util_for_colorbar = np.max(active_util_values)
+            link_default_linewidth = 1.5 # Restore original linewidth for default
+
     else:
         # Default settings if utilization is not provided or all active links have zero utilization
         link_default_color = 'gray'
@@ -933,11 +958,16 @@ def plot_connectivity(positions: np.ndarray, C: np.ndarray, utilization: np.ndar
                 if use_utilization_coloring:
                     # Get the normalized utilization for this link
                     # Use the stored normalized value
-                    link_norm_util = full_normalized_utilization[i, j]
+                    link_norm_util = max(full_normalized_utilization[i, j], full_normalized_utilization[j, i]) 
                     link_color = cmap(link_norm_util)
-                    ax.plot(xline, yline, zline, color=link_color, linewidth=1.5)
+
+                    ax.plot(xline, yline, zline, color=link_color, linewidth=3)
                 else:
                     ax.plot(xline, yline, zline, color=link_default_color, linewidth=link_default_linewidth)
+
+    #create axis to show orientation
+    axis_length = np.linalg.norm(positions[0]) * 1.2 # Make it a bit longer than the sphere's extent
+    ax.plot([0, 0], [0, 0], [-axis_length, axis_length], color='black', linewidth=3, label='Polar Axis')
 
     # Styling
     ax.set_xlabel('X')
@@ -954,11 +984,21 @@ def plot_connectivity(positions: np.ndarray, C: np.ndarray, utilization: np.ndar
     ax.grid(False)
 
     # Add a colorbar only if utilization coloring is applied
+    # if use_utilization_coloring:
+    #     sm = cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max_util_for_colorbar))
+    #     sm.set_array([]) # Or set to original utilization values if you want it to be populated
+    #     cbar = fig.colorbar(sm, ax=ax, shrink=0.5, aspect=10, pad=0.05)
+    #     cbar.set_label('Link Utilization', rotation=270, labelpad=15)
+
+
+    # Add a colorbar only if utilization coloring is applied
     if use_utilization_coloring:
-        sm = cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max_util_for_colorbar))
-        sm.set_array([]) # Or set to original utilization values if you want it to be populated
+        # Crucially, pass the SAME `norm` object to ScalarMappable
+        sm = cm.ScalarMappable(cmap=cmap, norm=norm) # Use the PowerNorm object
+        sm.set_array(active_util_values) # Set the original values for the colorbar to map
         cbar = fig.colorbar(sm, ax=ax, shrink=0.5, aspect=10, pad=0.05)
         cbar.set_label('Link Utilization', rotation=270, labelpad=15)
+
 
     plt.show()
 
@@ -1025,7 +1065,6 @@ def plot_connectivity_old(positions: np.ndarray, C: np.ndarray, figsize=(8,8), t
 #     hard_R.scatter_(-1, max_indices, 1.0)
     
 #     print(torch.sum(hard_R - R))
-#     pdb.set_trace()
 
 #     return hard_R
 
@@ -1056,7 +1095,7 @@ def harden_routing(R):
     out_R = active_mask * hard_R + (1 - active_mask) * R
 
     # print(torch.sum(out_R - R))
-    # pdb.set_trace()
+    
 
     return out_R
 
@@ -1439,3 +1478,35 @@ def size_weighted_latency_matrix_networkx(connectivity_matrix: np.ndarray, traff
     size_weighted_latency[np.isnan(size_weighted_latency)] = 0 # Replace NaNs (from 0*inf) with 0
 
     return [size_weighted_latency[traffic_matrix > 0]*traffic_matrix[traffic_matrix > 0]]
+
+def plot_loss(epochs, losses):
+    plt.rcParams.update({
+        'font.size': 12,        # General font size for text
+        'axes.labelsize': 14,   # Font size for x and y axis labels
+        'axes.titlesize': 16,   # Font size for plot title
+        'xtick.labelsize': 12,  # Font size for x-axis tick labels
+        'ytick.labelsize': 12,  # Font size for y-axis tick labels
+        'legend.fontsize': 12,  # Font size for legend
+        'figure.titlesize': 18, # Font size for suptitle (if used)
+        'figure.figsize': (8, 6), # Standard figure size (width, height) in inches
+        'lines.linewidth': 2,   # Default line width
+        'lines.markersize': 6,  # Default marker size
+        'axes.grid': True,      # Enable grid by default (good for curves)
+        'grid.alpha': 0.7,      # Transparency of the grid lines
+        'grid.linestyle': '--', # Style of the grid lines
+        'grid.linewidth': 0.5,  # Width of the grid lines
+        'axes.edgecolor': 'black', # Color of the plot border
+        'axes.linewidth': 1.0,  # Width of the plot border
+    })
+
+    plt.figure(figsize=(9, 6)) # Can override global figsize for specific plots
+    plt.plot(epochs, losses, linestyle='-')
+
+
+    plt.title('Model Training Loss Over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss Value')
+    plt.grid(True, linestyle='--', alpha=0.6) # Can override global grid settings if needed
+    plt.legend(loc='upper right', frameon=True, shadow=True, borderpad=1) # Customize legend
+    plt.tight_layout() # Adjust plot parameters for a tight layout
+    plt.show()

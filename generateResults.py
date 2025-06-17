@@ -46,7 +46,7 @@ for i in range(1,11):
     inputs['numSatellites'] = numSatellites
     inputs['orbitalPlanes'] = numPlanes
     inputs['numFlows'] = numFlows
-    inputs['fileToSaveTo'] = "Data/" + "VariableConstHops" + str(numSatellites)
+    inputs['fileToSaveTo'] = "Data/" + "VariableConstHopsPopBased" + str(numSatellites)
 
     #create debug 
     print("Iteration # : " + str(i))

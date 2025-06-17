@@ -19,7 +19,7 @@ def run_simulation(numFlows,
                    lr, 
                    fileToSaveTo,
                    metricToOptimize = "latency",
-                   demandDist = "random"):
+                   demandDist = "popBased"):
     #demand dist can be random or popBased
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
@@ -121,7 +121,7 @@ def run_simulation(numFlows,
 
         #filter out flows that are too small
         flat_data = flows_matrix.flatten()
-        percentile_value = np.percentile(flat_data, 96)
+        percentile_value = np.percentile(flat_data, 92)
         flows_matrix[flows_matrix < percentile_value] = 0
             
         #then, get source, dest, flow value components
@@ -187,6 +187,8 @@ def run_simulation(numFlows,
     )
 
     reset = False
+
+    lossArr = []
 
     # ─── 6) Create differentiable process for learning beam allocations───────────────────────────────────────
     for epoch in range(epochs):
@@ -394,6 +396,8 @@ def run_simulation(numFlows,
 
         update_state(epoch, total_latency.item())
 
+        lossArr.append(total_latency.item())
+
         print("Logit magnitude diff, all: " + str( torch.sum(torch.abs(holdLogits - connLogits))))
         print("Logit magnitude diff, feasible: " + str( torch.sum(torch.abs(foldFLogits - connectivity_logits))))
 
@@ -402,6 +406,18 @@ def run_simulation(numFlows,
         # ——— log to TensorBoard —————————————————————————————————————————————
         writer.add_scalar('Loss/TotalLatency', total_latency.item(), epoch)
         
+    #Plot loss...
+    #myUtils.plot_loss(np.arange(len(lossArr))+1, lossArr)
+
+    #Save it as well
+    # Define file names
+    #file_name = "exampleLoss360Hops.npy"
+
+    # Save each array individually
+    #np.save(file_name, lossArr)
+
+    #pdb.set_trace()
+
     # ─── Finish up ─────────────────────────────────────────────────────────────────
 
     #if we are optimizing hop count, then normalize distance matrix 
@@ -448,7 +464,7 @@ def run_simulation(numFlows,
     _, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
     myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
 
-    #pdb.set_trace()
+    pdb.set_trace()
 
     motifSumLatency, graph = calculate_min_metric(
         1,
@@ -543,7 +559,7 @@ def run_simulation(numFlows,
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=100, help='Number of flows')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=3, help='Number of epochs')
     parser.add_argument('--numSatellites', type=int, default=200, help='Number of satellites')
     parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')

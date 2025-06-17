@@ -1,125 +1,156 @@
 import numpy as np
-import networkx as nx
-import pdb
-# --- Original Floyd-Warshall implementation (for reference, no change needed) ---
-def size_weighted_latency_matrix_original(connectivity_matrix, traffic_matrix):
-    num_nodes = connectivity_matrix.shape[0]
-    distance_matrix = np.copy(connectivity_matrix)
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from mpl_toolkits.mplot3d import Axes3D
+import random
+import pdb 
 
-    for k in range(num_nodes):
-        for i in range(num_nodes):
-            for j in range(num_nodes):
-                if distance_matrix[i, k] != np.inf and distance_matrix[k, j] != np.inf:
-                    distance_matrix[i, j] = np.minimum(distance_matrix[i, j], distance_matrix[i, k] + distance_matrix[k, j])
+def plot_spherical_network_with_colored_lines(
+    num_points: int = 30,
+    radius: float = 1.0,
+    connection_probability: float = 0.15,
+    line_width: float = 1.0, # Increased default for better visibility of color
+    point_size: int = 70,    # Increased default for better visibility
+    cmap_name: str = 'coolwarm', # Good for cool-to-warm gradient
+    title: str = "3D Network on a Sphere (Colored Lines)"
+):
+    """
+    Plots a set of points around a sphere in 3D, with colors ranging from cool to warm,
+    and connects them sparsely to form a graph. Both points and lines are colored
+    according to the specified colormap.
 
-    # Element-wise multiplication of latency and traffic matrices
-    # np.multiply handles 0 * inf as nan by default. The original method implicitly allows this.
-   
-    print("FW")
-    print(distance_matrix)
-    size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
+    Parameters
+    ----------
+    num_points : int, optional
+        The number of points to plot on the sphere. Defaults to 30.
+    radius : float, optional
+        The radius of the sphere. Defaults to 1.0.
+    connection_probability : float, optional
+        The probability (between 0 and 1) that any two distinct points will be connected.
+        A lower value results in a sparser graph. Defaults to 0.15.
+    line_width : float, optional
+        The linewidth of the connection lines. Defaults to 1.0.
+    point_size : int, optional
+        The size of the individual points (markers). Defaults to 70.
+    cmap_name : str, optional
+        The name of the Matplotlib colormap to use for coloring points and lines.
+        'viridis', 'plasma', 'inferno', 'magma', 'coolwarm' are good choices.
+    title : str, optional
+        The title of the plot.
+    """
+    if num_points <= 0:
+        raise ValueError("num_points must be greater than 0.")
+    if not (0 <= connection_probability <= 1):
+        raise ValueError("connection_probability must be between 0 and 1.")
 
+    # 1. Generate Points on a Sphere
+    theta = np.random.uniform(0, 2 * np.pi, num_points)
+    phi = np.arccos(2 * np.random.rand(num_points) - 1)
 
-    return size_weighted_latency[traffic_matrix > 0]*traffic_matrix[traffic_matrix > 0]
+    x = radius * np.sin(phi) * np.cos(theta)
+    y = radius * np.sin(phi) * np.sin(theta)
+    z = radius * np.cos(phi)
 
-# --- NetworkX Dijkstra-based implementation (with nan handling) ---
-def size_weighted_latency_matrix_networkx(connectivity_matrix: np.ndarray, traffic_matrix: np.ndarray):
-    num_nodes = connectivity_matrix.shape[0]
+    positions = np.stack([x, y, z], axis=-1)
 
-    distance_matrix = np.full((num_nodes, num_nodes), np.inf)
-
-    G = nx.DiGraph()
-    for i in range(num_nodes):
-        G.add_node(i)
+    # 2. Assign Scalar Values for Coloring Points and Lines
+    # Use point index as the scalar value for a smooth cool-to-warm transition
+    scalar_values_for_color = np.arange(num_points)
     
-    for i in range(num_nodes):
-        for j in range(num_nodes):
-            if connectivity_matrix[i, j] != np.inf and i != j:
-                G.add_edge(i, j, weight=connectivity_matrix[i, j])
+    # Normalize scalar values for colormap application
+    norm = plt.Normalize(vmin=scalar_values_for_color.min(), vmax=scalar_values_for_color.max())
+    
+    cmap = cm.coolwarm
 
-    active_sources = np.where(np.any(traffic_matrix != 0, axis=1))[0]
 
-    for source_node in active_sources:
-        shortest_paths_from_source = nx.single_source_dijkstra_path_length(G, source_node, weight='weight')
-        for dest_node, dist in shortest_paths_from_source.items():
-            distance_matrix[source_node, dest_node] = dist
-            
-    np.fill_diagonal(distance_matrix, 0) # Distance from node to itself is 0
+    # Get colors for each point
+    point_colors = cmap(norm(scalar_values_for_color))
 
-    size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
+    # 3. Generate Sparse Graph Connections
+    connectivity_matrix = np.zeros((num_points, num_points), dtype=bool)
+    connected_pairs = []
 
-    size_weighted_latency[np.isnan(size_weighted_latency)] = 0 # Replace NaNs (from 0*inf) with 0
+    for i in range(num_points):
+        for j in range(i + 1, num_points):
+            if random.random() < connection_probability:
+                connectivity_matrix[i, j] = True
+                connectivity_matrix[j, i] = True
+                connected_pairs.append((i, j))
 
-    return size_weighted_latency[traffic_matrix > 0]*traffic_matrix[traffic_matrix > 0]
+    # 4. Plotting
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
 
-# --- Test Method (same as before) ---
-def test_latency_matrix_implementations():
-    print("Running comparison test for latency matrix implementations...")
+    # Plot points
+    scatter = ax.scatter(x, y, z, c=point_colors, s=point_size, cmap=cmap_name, label='Points', zorder=2) # zorder to keep points on top
 
-    # --- Test Case 1: Small, dense graph ---
-    num_nodes_1 = 4
-    conn_matrix_1 = np.array([
-        [0, 1, np.inf, 4],
-        [1, 0, 2, np.inf],
-        [np.inf, 2, 0, 1],
-        [4, np.inf, 1, 0]
-    ])
-    traffic_matrix_1 = np.array([
-        [0, 10, 5, 0],
-        [1, 0, 0, 15],
-        [0, 2, 0, 3],
-        [10, 0, 5, 0]
-    ])
+    # Plot connections with colors derived from the colormap
+    for i, j in connected_pairs:
+        # Determine scalar value for the line segment
+        # Using the average of the two connected node's scalar values
+        line_scalar_value = (scalar_values_for_color[i] + scalar_values_for_color[j]) / 2.0
+    
+        line_color = cmap(norm(line_scalar_value))
+        print(line_color)
 
-    print("\n--- Test Case 1: Small, dense graph ---")
-    output_original_1 = size_weighted_latency_matrix_original(conn_matrix_1, traffic_matrix_1)
-    output_networkx_1 = size_weighted_latency_matrix_networkx(conn_matrix_1, traffic_matrix_1)
+        pdb.set_trace()
 
-    print("\nOriginal (Floyd-Warshall) Output:")
-    print(output_original_1)
-    print("\nNetworkX (Dijkstra) Output:")
-    print(output_networkx_1)
+        xline = [positions[i, 0], positions[j, 0]]
+        yline = [positions[i, 1], positions[j, 1]]
+        zline = [positions[i, 2], positions[j, 2]]
+        
+        ax.plot(xline, yline, zline, color=line_color, linewidth=3, alpha=0.8, zorder=1) # zorder to keep lines behind points
 
-    try:
-        np.testing.assert_allclose(output_original_1, output_networkx_1, rtol=1e-7, atol=1e-8, equal_nan=False)
-        print("\nTest Case 1 PASSED: Outputs match!")
-    except AssertionError as e:
-        print(f"\nTest Case 1 FAILED: Outputs do NOT match!\n{e}")
+    # Set labels and title
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title(title, fontsize=16)
 
-    # --- Test Case 2: Larger, sparse graph with some unreachable nodes ---
-    num_nodes_2 = 7
-    conn_matrix_2 = np.full((num_nodes_2, num_nodes_2), np.inf)
-    np.fill_diagonal(conn_matrix_2, 0)
+    # Make the plot look like a sphere (equal aspect ratio)
+    max_range = np.array([x.max()-x.min(), y.max()-y.min(), z.max()-z.min()]).max() / 2.0
+    mid_x = (x.max()+x.min()) * 0.5
+    mid_y = (y.max()+y.min()) * 0.5
+    mid_z = (z.max()+z.min()) * 0.5
+    ax.set_xlim(mid_x - max_range, mid_x + max_range)
+    ax.set_ylim(mid_y - max_range, mid_y + max_range)
+    ax.set_zlim(mid_z - max_range, mid_z + max_range)
 
-    conn_matrix_2[0, 1] = 1
-    conn_matrix_2[1, 2] = 2
-    conn_matrix_2[2, 3] = 1
-    conn_matrix_2[0, 4] = 10 
-    conn_matrix_2[3, 5] = 5
-    conn_matrix_2[5, 6] = 2
-    conn_matrix_2[6, 0] = 3 
+    # Optional: Remove grid lines and axis ticks for a cleaner sphere look
+    ax.grid(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_zticks([])
+    
+    # Add a colorbar to indicate the cool-to-warm mapping
+    cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, aspect=10, pad=0.05)
+    cbar.set_label('Point/Line Property (Cool to Warm)', rotation=270, labelpad=15)
 
-    traffic_matrix_2 = np.zeros((num_nodes_2, num_nodes_2))
-    traffic_matrix_2[0, 3] = 100 
-    traffic_matrix_2[1, 5] = 50  
-    traffic_matrix_2[4, 6] = 20  
-    traffic_matrix_2[2, 0] = 5   
+    plt.show()
 
-    print("\n--- Test Case 2: Larger, sparse graph ---")
-    output_original_2 = size_weighted_latency_matrix_original(conn_matrix_2, traffic_matrix_2)
-    output_networkx_2 = size_weighted_latency_matrix_networkx(conn_matrix_2, traffic_matrix_2)
-
-    print("\nOriginal (Floyd-Warshall) Output:")
-    print(output_original_2)
-    print("\nNetworkX (Dijkstra) Output:")
-    print(output_networkx_2)
-
-    try:
-        np.testing.assert_allclose(output_original_2, output_networkx_2, rtol=1e-7, atol=1e-8, equal_nan=False)
-        print("\nTest Case 2 PASSED: Outputs match!")
-    except AssertionError as e:
-        print(f"\nTest Case 2 FAILED: Outputs do NOT match!\n{e}")
-
-# --- Run the test ---
+# --- Example Usage ---
 if __name__ == "__main__":
-    test_latency_matrix_implementations()
+    # Default plot with colored lines
+    # plot_spherical_network_with_colored_lines()
+
+    # Another example with 'plasma' colormap and more points
+    plot_spherical_network_with_colored_lines(
+        num_points=40,
+        radius=3.0,
+        connection_probability=0.1,
+        line_width=1.5,
+        point_size=100,
+        cmap_name='plasma',
+        title="Sphere Network with Plasma Colored Connections"
+    )
+
+    # # Example with 'magma' colormap and denser connections
+    # plot_spherical_network_with_colored_lines(
+    #     num_points=35,
+    #     radius=1.5,
+    #     connection_probability=0.3,
+    #     line_width=0.8,
+    #     point_size=60,
+    #     cmap_name='magma',
+    #     title="Denser Network with Magma Colored Connections"
+    # )
