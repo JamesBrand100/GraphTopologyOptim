@@ -19,7 +19,7 @@ def run_simulation(numFlows,
                    lr, 
                    fileToSaveTo,
                    metricToOptimize = "latency",
-                   demandDist = "popBased"):
+                   demandDist = "random"):
     #demand dist can be random or popBased
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
@@ -91,8 +91,7 @@ def run_simulation(numFlows,
 
         # pdb.set_trace()
 
-
-    #otherwise, generate based on population
+    #otherwise, generate based on populationa
     elif(demandDist == "popBased"):
 
         #first, load in population and associated locations
@@ -461,10 +460,8 @@ def run_simulation(numFlows,
 
     #plot grid+ baseline 
     print("Creating grid+ plot with metrics")
-    _, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
-    myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
-
-    pdb.set_trace()
+    #_, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
+    #myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
 
     motifSumLatency, graph = calculate_min_metric(
         1,

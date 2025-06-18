@@ -695,67 +695,67 @@ def FW(connectivity_matrix):
 
     return distance_matrix
 
-def size_weighted_latency_matrix_networkx(connectivity_matrix: np.ndarray, traffic_matrix: np.ndarray):
-    """
-    Computes the size-weighted latency matrix based on connectivity and traffic,
-    leveraging NetworkX's Dijkstra's algorithm. This is more efficient than
-    Floyd-Warshall when the traffic matrix is sparse.
+# def size_weighted_latency_matrix_networkx(connectivity_matrix: np.ndarray, traffic_matrix: np.ndarray):
+#     """
+#     Computes the size-weighted latency matrix based on connectivity and traffic,
+#     leveraging NetworkX's Dijkstra's algorithm. This is more efficient than
+#     Floyd-Warshall when the traffic matrix is sparse.
 
-    Args:
-        connectivity_matrix (numpy.ndarray): A square matrix representing the
-            connectivity or one-hop latency between nodes. A value of infinity
-            (np.inf) indicates no direct connection. Edge weights should be
-            non-negative for Dijkstra's.
-        traffic_matrix (numpy.ndarray): A square matrix representing the traffic
-            demand between each source-destination pair.
+#     Args:
+#         connectivity_matrix (numpy.ndarray): A square matrix representing the
+#             connectivity or one-hop latency between nodes. A value of infinity
+#             (np.inf) indicates no direct connection. Edge weights should be
+#             non-negative for Dijkstra's.
+#         traffic_matrix (numpy.ndarray): A square matrix representing the traffic
+#             demand between each source-destination pair.
 
-    Returns:
-        numpy.ndarray: A square matrix representing the size-weighted latency
-        between each source-destination pair.
-    """
-    num_nodes = connectivity_matrix.shape[0]
+#     Returns:
+#         numpy.ndarray: A square matrix representing the size-weighted latency
+#         between each source-destination pair.
+#     """
+#     num_nodes = connectivity_matrix.shape[0]
 
-    # Initialize the distance matrix with infinity for all pairs
-    distance_matrix = np.full((num_nodes, num_nodes), np.inf)
+#     # Initialize the distance matrix with infinity for all pairs
+#     distance_matrix = np.full((num_nodes, num_nodes), np.inf)
 
-    # Create a NetworkX graph from the connectivity matrix
-    # We'll use a DiGraph because traffic might not flow symmetrically or costs might differ
-    G = nx.DiGraph()
-    for i in range(num_nodes):
-        G.add_node(i)
+#     # Create a NetworkX graph from the connectivity matrix
+#     # We'll use a DiGraph because traffic might not flow symmetrically or costs might differ
+#     G = nx.DiGraph()
+#     for i in range(num_nodes):
+#         G.add_node(i)
     
-    # Add edges to the graph where there's a connection (not infinity)
-    # The weight of the edge is the latency from the connectivity_matrix
-    for i in range(num_nodes):
-        for j in range(num_nodes):
-            if connectivity_matrix[i, j] != np.inf and i != j: # Exclude self-loops from edges, though FW handles 0
-                G.add_edge(i, j, weight=connectivity_matrix[i, j])
+#     # Add edges to the graph where there's a connection (not infinity)
+#     # The weight of the edge is the latency from the connectivity_matrix
+#     for i in range(num_nodes):
+#         for j in range(num_nodes):
+#             if connectivity_matrix[i, j] != np.inf and i != j: # Exclude self-loops from edges, though FW handles 0
+#                 G.add_edge(i, j, weight=connectivity_matrix[i, j])
 
-    # Identify unique source nodes with non-zero traffic
-    # np.any(traffic_matrix, axis=1) returns a boolean array where True means the row has at least one non-zero
-    # np.where gets the indices of these rows (source nodes)
-    active_sources = np.where(np.any(traffic_matrix != 0, axis=1))[0]
+#     # Identify unique source nodes with non-zero traffic
+#     # np.any(traffic_matrix, axis=1) returns a boolean array where True means the row has at least one non-zero
+#     # np.where gets the indices of these rows (source nodes)
+#     active_sources = np.where(np.any(traffic_matrix != 0, axis=1))[0]
 
-    # If traffic_matrix[i,j] != 0 implies traffic *from* i *to* j,
-    # then we only need to run Dijkstra from source nodes 'i' where traffic_matrix[i,:] has non-zero entries.
-    for source_node in active_sources:
-        # Run Dijkstra's algorithm from the current source node
-        # Returns a dictionary where keys are destinations and values are shortest path lengths
-        shortest_paths_from_source = nx.single_source_dijkstra_path_length(G, source_node, weight='weight')
+#     # If traffic_matrix[i,j] != 0 implies traffic *from* i *to* j,
+#     # then we only need to run Dijkstra from source nodes 'i' where traffic_matrix[i,:] has non-zero entries.
+#     for source_node in active_sources:
+#         # Run Dijkstra's algorithm from the current source node
+#         # Returns a dictionary where keys are destinations and values are shortest path lengths
+#         shortest_paths_from_source = nx.single_source_dijkstra_path_length(G, source_node, weight='weight')
         
-        # Populate the row in our distance_matrix
-        for dest_node, dist in shortest_paths_from_source.items():
-            distance_matrix[source_node, dest_node] = dist
+#         # Populate the row in our distance_matrix
+#         for dest_node, dist in shortest_paths_from_source.items():
+#             distance_matrix[source_node, dest_node] = dist
             
-    # For self-loops (traffic from node to itself), distance is 0
-    np.fill_diagonal(distance_matrix, 0) # Assumes latency from node to itself is 0
+#     # For self-loops (traffic from node to itself), distance is 0
+#     np.fill_diagonal(distance_matrix, 0) # Assumes latency from node to itself is 0
 
 
-    # Element-wise multiplication of shortest path latency and traffic matrices
-    # If a path was unreachable (still np.inf in distance_matrix), the weighted latency will also be np.inf
-    size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
+#     # Element-wise multiplication of shortest path latency and traffic matrices
+#     # If a path was unreachable (still np.inf in distance_matrix), the weighted latency will also be np.inf
+#     size_weighted_latency = np.multiply(distance_matrix, traffic_matrix)
 
-    return size_weighted_latency
+#     return size_weighted_latency
 
 def size_weighted_latency_matrix(connectivity_matrix, traffic_matrix):
     """
@@ -1477,7 +1477,9 @@ def size_weighted_latency_matrix_networkx(connectivity_matrix: np.ndarray, traff
 
     size_weighted_latency[np.isnan(size_weighted_latency)] = 0 # Replace NaNs (from 0*inf) with 0
 
-    return [size_weighted_latency[traffic_matrix > 0]*traffic_matrix[traffic_matrix > 0]]
+    return size_weighted_latency
+
+    #return [size_weighted_latency[traffic_matrix > 0]*traffic_matrix[traffic_matrix > 0]]
 
 def plot_loss(epochs, losses):
     plt.rcParams.update({

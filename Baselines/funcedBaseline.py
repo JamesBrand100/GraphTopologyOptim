@@ -321,36 +321,29 @@ def calculate_min_metric(
 
     NUM_SATS_PER_ORBIT = numSatellites // NUM_ORBITS
 
-    # Generate constellation
+    # Generate constellation and distance components 
     positions, vecs = myUtils.generateWalkerStarConstellationPoints(numSatellites,
                                                                     inclination,
                                                                     NUM_ORBITS,
                                                                     phasingParameter,
                                                                     orbitRadius)
-
     sat_positions = convert_positions_to_sat_dict(positions, EARTH_MEAN_RADIUS)
-
-    #
     shapedPositions = np.reshape(positions, [np.shape(positions)[0] * np.shape(positions)[1], np.shape(positions)[2]])
     feasibleMask = myUtils.check_los(shapedPositions, shapedPositions)
-
-    dmat = cdist(shapedPositions, shapedPositions) / (3e8)
+    dmat = cdist(shapedPositions, shapedPositions) 
 
     #generate possible topology configurations 
     valid_isls = convert_feasible_mask_to_valid_isls(feasibleMask, positions, dmat)
-
     valid_motif_possibilities = find_motif_possibilities_func(valid_isls, sat_positions, NUM_ORBITS,
                                                               NUM_SATS_PER_ORBIT)
 
     #format demand properly 
     greatCircleCross = myUtils.great_circle_distance_matrix_cartesian(shapedPositions, orbitRadius)
-
     city_pairs = {i: {'city_1': src, 'city_2': dst, 'geo_dist': greatCircleCross[src, dst].item()}
                   for i, (src, dst) in enumerate(zip(src_inds, dst_inds))}
-
     city_positions = shapedPositions
     flow_pops = demandVals
-
+    
     city_coverage = [
         {'city': i, 'sat': i, 'dist': 0.0}
         for i in range(numSatellites)
@@ -397,10 +390,12 @@ def calculate_min_metric(
         valid_motif_possibilities[value["motif_cnt"]]["weightedHopCountSum"] = value["weightedHopCountSum"]
     
     #min_motif_dict = min(valid_motif_possibilities.values(), key=lambda x: x['weightedLatency'])
+    import pdb
+    pdb.set_trace()
 
     if(minMetric == "latency"):
         min_motif_dict = min(valid_motif_possibilities.values(), key=lambda x: x['weightedLatency'])
-
+        [x['weightedLatency'] for x in valid_motif_possibilities.values()]
         return min_motif_dict['weightedLatency'], min_motif_dict['linkedGraph']
 
     if(minMetric == "hops"):
