@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import re
 import os
 
-data_dir = '../Data/VariableConst/'  # Assuming the script is run from the parent directory of 'Data'
+data_dir = '../Data/'  # Assuming the script is run from the parent directory of 'Data'
 files = [f for f in os.listdir(data_dir) if f.endswith('.json')]
 
 x = []
@@ -15,7 +15,7 @@ motif_latencies = []
 
 for filename in sorted(files):
     #Change this line for each type of run / analysis
-    match = re.search(r'RoutingLogitsConst(\d+)', filename)
+    match = re.search(r'VariableConstLatencyBased(\d+)', filename)
     if match:
         flow_value = int(match.group(1))
         x.append(flow_value)

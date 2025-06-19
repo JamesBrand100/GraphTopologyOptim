@@ -169,7 +169,7 @@ def find_motif_possibilities_func(valid_isls, sat_positions, NUM_ORBITS, NUM_SAT
     return motif_possibilities
 
 
-def add_motif_links_to_graph(grph, motif, sat_positions, NUM_ORBITS, NUM_SATS_PER_ORBIT):
+def add_motif_links_to_graph(grph, motif, sat_positions, NUM_ORBITS, NUM_SATS_PER_ORBIT, feasibleMask):
     """
     Adds ISLs to graph based on the current motif
     :param grph: The graph under consideration with nodes being the satellites and/or cities
@@ -181,7 +181,7 @@ def add_motif_links_to_graph(grph, motif, sat_positions, NUM_ORBITS, NUM_SATS_PE
         sel_sat_id = util.get_neighbor_satellite(sat_positions[i]["orb_id"], sat_positions[i]["orb_sat_id"],
                                                  motif["sat_1_orb_offset"], motif["sat_1_sat_offset"], sat_positions,
                                                  NUM_ORBITS, NUM_SATS_PER_ORBIT)
-        is_possible = util.check_edge_availability(grph, i, sel_sat_id)
+        is_possible = util.check_edge_availability(grph, i, sel_sat_id) and feasibleMask[i,sel_sat_id]
 
         if is_possible:
             dist = np.linalg.norm(sat_positions[i]['xyz'] - sat_positions[sel_sat_id]['xyz'])
@@ -190,7 +190,7 @@ def add_motif_links_to_graph(grph, motif, sat_positions, NUM_ORBITS, NUM_SATS_PE
         sel_sat_id = util.get_neighbor_satellite(sat_positions[i]["orb_id"], sat_positions[i]["orb_sat_id"],
                                                  motif["sat_2_orb_offset"], motif["sat_2_sat_offset"], sat_positions,
                                                  NUM_ORBITS, NUM_SATS_PER_ORBIT)
-        is_possible = util.check_edge_availability(grph, i, sel_sat_id)
+        is_possible = util.check_edge_availability(grph, i, sel_sat_id) and feasibleMask[i,sel_sat_id]
         if is_possible:
             dist = np.linalg.norm(sat_positions[i]['xyz'] - sat_positions[sel_sat_id]['xyz'])
             #dist = util.compute_isl_length(i, sel_sat_id, sat_positions)
@@ -267,7 +267,7 @@ def compute_metric_avoid_city(grph, city_pairs, city_coverage, flow_pops):
 
 
 def run_motif_analysis(grph, motif_cnt, motif, return_dict, sat_positions, NUM_ORBITS, NUM_SATS_PER_ORBIT, city_pairs,
-                       city_coverage, flow_pops):
+                       city_coverage, flow_pops, feasibleMask):
     """
     Runs motif analysis for individual motifs
     :param grph: The graph under consideration
@@ -276,7 +276,7 @@ def run_motif_analysis(grph, motif_cnt, motif, return_dict, sat_positions, NUM_O
     :param return_dict: The return values
     """
 
-    grph = add_motif_links_to_graph(grph, motif, sat_positions, NUM_ORBITS, NUM_SATS_PER_ORBIT)
+    grph = add_motif_links_to_graph(grph, motif, sat_positions, NUM_ORBITS, NUM_SATS_PER_ORBIT, feasibleMask)
     retVal = compute_metric_avoid_city(grph, city_pairs, city_coverage, flow_pops)
     motif["wMetric"] = retVal["wMetric"]
     motif["wStretch"] = retVal["avgWeightedStretch"]
@@ -300,7 +300,8 @@ def calculate_min_metric(
         dst_inds: [] = [],
         demandVals: [] = [],
         multiProcessed = True,
-        minMetric = "latency"
+        minMetric = "latency",
+        feasibleMask = []
     ) -> float:
     """
     Calculates the weighted latency for a satellite constellation based on various parameters.
@@ -367,7 +368,7 @@ def calculate_min_metric(
                     #       f"{valid_motif_possibilities[idx]['sat_2_id']}")
                     p = Process(target=run_motif_analysis,
                                 args=(G.copy(), idx, valid_motif_possibilities[idx], return_dict, sat_positions,
-                                    NUM_ORBITS, NUM_SATS_PER_ORBIT, city_pairs, city_coverage, flow_pops))
+                                    NUM_ORBITS, NUM_SATS_PER_ORBIT, city_pairs, city_coverage, flow_pops, feasibleMask))
                     threads.append(p)
                     p.start()
 
@@ -379,7 +380,7 @@ def calculate_min_metric(
             # print(f"Generating graph for motif: {valid_motif_possibilities[i]['sat_1_id']}, "
             #       f"{valid_motif_possibilities[i]['sat_2_id']}")
             run_motif_analysis(G.copy(), i, valid_motif_possibilities[i], return_dict, sat_positions, NUM_ORBITS,
-                               NUM_SATS_PER_ORBIT, city_pairs, city_coverage, flow_pops)
+                               NUM_SATS_PER_ORBIT, city_pairs, city_coverage, flow_pops, feasibleMask)
 
     for value in return_dict.values():
         valid_motif_possibilities[value["motif_cnt"]]["wMetric"] = value["wMetric"]
@@ -390,8 +391,6 @@ def calculate_min_metric(
         valid_motif_possibilities[value["motif_cnt"]]["weightedHopCountSum"] = value["weightedHopCountSum"]
     
     #min_motif_dict = min(valid_motif_possibilities.values(), key=lambda x: x['weightedLatency'])
-    import pdb
-    pdb.set_trace()
 
     if(minMetric == "latency"):
         min_motif_dict = min(valid_motif_possibilities.values(), key=lambda x: x['weightedLatency'])
