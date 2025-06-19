@@ -119,9 +119,18 @@ def run_simulation(numFlows,
         flows_matrix = np.triu(flows_matrix)
 
         #filter out flows that are too small
-        flat_data = flows_matrix.flatten()
-        percentile_value = np.percentile(flat_data, 96)
-        flows_matrix[flows_matrix < percentile_value] = 0
+        # flat_data = flows_matrix.flatten()
+        # percentile_value = np.percentile(flat_data, 96)
+        # flows_matrix[flows_matrix < percentile_value] = 0
+
+        num_top_flows = 500
+        flat_flows = flows_matrix[flows_matrix > 0]
+        
+        if len(flat_flows) > num_top_flows:
+            threshold_value = np.partition(flat_flows, -num_top_flows)[-num_top_flows]
+            flows_matrix[flows_matrix < threshold_value] = 0
+        else:
+            pass
 
         src_indices, dst_indices = np.nonzero(flows_matrix)
 

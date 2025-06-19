@@ -1369,7 +1369,7 @@ def create_individual_param_reset_method(params_and_optimizers, epochs_to_track=
 
     return update_state_history, reset_to_previous_state, reset_to_best_state, find_closest_logit_history
 
-def graph_to_matrix_representation(graph: nx.Graph) -> tuple[dict, np.ndarray]:
+def graph_to_matrix_representation(graph: nx.Graph):# -> tuple[dict, np.ndarray]:
 
     if not graph.nodes:
         return {}, np.array([])
