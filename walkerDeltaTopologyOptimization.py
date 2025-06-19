@@ -451,17 +451,21 @@ def run_simulation(numFlows,
     #same process, but we generate c in one step here 
     gridPlusConn = myUtils.build_plus_grid_connectivity(positions,
                                                         orbitalPlanes,
-                                                        int(numSatellites/orbitalPlanes)) 
-    gridPlusProp = np.multiply(gridPlusConn, dmat )
+                                                        int(numSatellites/orbitalPlanes))
+
+    gridPlusConn = gridPlusConn*feasibleMask
+
+    gridPlusProp = np.multiply(gridPlusConn, dmat)
+    #pdb.set_trace()
     gridPlusProp[gridPlusProp == 0] = 1000
     np.fill_diagonal(gridPlusProp, 0)
     gridPlusLatencyMat = myUtils.size_weighted_latency_matrix_networkx(gridPlusProp, T_store)
     gridPlusSumLatency = np.sum(gridPlusLatencyMat)
 
     #plot grid+ baseline 
-    print("Creating grid+ plot with metrics")
-    #_, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
-    #myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
+    # print("Creating grid+ plot with metrics")
+    # _, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
+    # myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
 
     motifSumLatency, graph = calculate_min_metric(
         1,
@@ -475,13 +479,17 @@ def run_simulation(numFlows,
         dst_indices,
         demandVals,
         False,
-        metricToOptimize
+        metricToOptimize,
+        feasibleMask
     ) 
 
     #convert graph to valid conn components 
     node_positions, conn = myUtils.graph_to_matrix_representation(graph)
     #plot motif baseline 
     #myUtils.plot_connectivity(node_positions, conn, figsize=(8,8))
+
+    _, link_utilization, _= myUtils.calculate_network_metrics(conn, T_store)
+    myUtils.plot_connectivity(node_positions, conn, link_utilization, figsize=(8,8))
 
     #save all metrics to dictionary
     metrics = {}
@@ -555,14 +563,14 @@ def run_simulation(numFlows,
     
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
-    parser.add_argument('--numFlows', type=int, default=100, help='Number of flows')
+    parser.add_argument('--numFlows', type=int, default=20, help='Number of flows')
     parser.add_argument('--epochs', type=int, default=3, help='Number of epochs')
-    parser.add_argument('--numSatellites', type=int, default=200, help='Number of satellites')
-    parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
+    parser.add_argument('--numSatellites', type=int, default=120, help='Number of satellites')
+    parser.add_argument('--orbitalPlanes', type=int, default=8, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
     parser.add_argument('--lr', type=float, default=0.03, help='Learning rate')
     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')
-    parser.add_argument('--metricToOptimize', type=str, default="hops", choices=['latency','hops'])
+    parser.add_argument('--metricToOptimize', type=str, default="latency", choices=['latency','hops'])
 
     args = parser.parse_args()
 
