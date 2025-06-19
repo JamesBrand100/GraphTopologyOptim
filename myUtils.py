@@ -908,8 +908,8 @@ def plot_connectivity(positions: np.ndarray,
 
     fig = plt.figure(figsize=figsize)
     ax  = fig.add_subplot(111, projection='3d')
-    fig.set_facecolor('darkgrey') # Or any valid color string/hex code
-    ax.set_facecolor('darkgrey') # Or any valid color string/hex code
+    #fig.set_facecolor('darkgrey') # Or any valid color string/hex code
+    #ax.set_facecolor('darkgrey') # Or any valid color string/hex code
     
     # Plot satellites
     xs, ys, zs = positions[:,0], positions[:,1], positions[:,2]
@@ -931,7 +931,11 @@ def plot_connectivity(positions: np.ndarray,
 
             #gamma_value = 0.4 # Experiment with this value (e.g., 0.1, 0.5)
             norm = mcolors.PowerNorm(gamma=gamma_value, vmin=0, vmax=np.max(active_util_values))
-            cmap = cm.Reds
+            colors = ["gray", "red"]
+
+            # Create the custom colormap
+            # The 'name' parameter is optional but good practice
+            cmap = mcolors.LinearSegmentedColormap.from_list("BluePurpleRed", colors)
 
             #normalized_utilization = active_util_values / np.max(active_util_values)
             # Create a full normalized matrix for easier lookup during plotting
@@ -959,7 +963,7 @@ def plot_connectivity(positions: np.ndarray,
                     # Get the normalized utilization for this link
                     # Use the stored normalized value
                     link_norm_util = max(full_normalized_utilization[i, j], full_normalized_utilization[j, i]) 
-                    link_color = cmap(link_norm_util)
+                    link_color = cmap(link_norm_util)[:-1] + (link_norm_util**0.8,) 
 
                     ax.plot(xline, yline, zline, color=link_color, linewidth=3)
                 else:
@@ -973,6 +977,15 @@ def plot_connectivity(positions: np.ndarray,
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
+
+    ax.set_xlim(-axis_length/1.5, axis_length/1.5)
+    ax.set_ylim(-axis_length/1.5, axis_length/1.5)
+    ax.set_zlim(-axis_length/1.5, axis_length/1.5)
+
+    # ax.set_xlim()
+    # ax.set_ylim()
+    # ax.set_zlim()
+    
     # No explicit legend for satellites if we're not using 'label' in scatter for color conflict
     # ax.legend() # Re-add if you put label back and handle it
 
@@ -980,7 +993,7 @@ def plot_connectivity(positions: np.ndarray,
 
     # Additional mods
     ax.axis('off')
-    ax.set_title(title_text, fontsize=20)
+    #ax.set_title(title_text, fontsize=20)
     ax.grid(False)
 
     # Add a colorbar only if utilization coloring is applied
@@ -996,9 +1009,10 @@ def plot_connectivity(positions: np.ndarray,
         # Crucially, pass the SAME `norm` object to ScalarMappable
         sm = cm.ScalarMappable(cmap=cmap, norm=norm) # Use the PowerNorm object
         sm.set_array(active_util_values) # Set the original values for the colorbar to map
-        cbar = fig.colorbar(sm, ax=ax, shrink=0.5, aspect=10, pad=0.05)
-        cbar.set_label('Link Utilization', rotation=270, labelpad=15)
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.4, aspect=10, pad=0.01)
+        cbar.set_label('Link Utilization (Bytes)', rotation=270, labelpad=15)
 
+    fig.subplots_adjust(left=0.2, right=0.8, bottom=0.01, top=0.95) # Adjusted for 3D plot
 
     plt.show()
 

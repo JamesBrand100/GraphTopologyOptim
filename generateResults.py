@@ -22,10 +22,11 @@ inputs = {
     'numSatellites': 360, 
     'orbitalPlanes': 15, 
     'routingMethod': 'LOSweight',
-    'epochs': 50, #200
+    'epochs': 100, #200
     'lr': 0.030, #.03
     'fileToSaveTo': "RoutingLogitsSmallConst",
-    'metricToOptimize': "hops"
+    'metricToOptimize': "latency",
+    'demandDist' : "popBased"
 } 
 
 #360, 24 
@@ -39,14 +40,10 @@ for i in range(1,11):
     #get # orbital planes 
     numPlanes = myUtils.find_closest_divisor_to_sqrt(numSatellites)
 
-    #get # flows
-    numFlows = int(numSatellites / 3)
-
     #update inputs 
     inputs['numSatellites'] = numSatellites
     inputs['orbitalPlanes'] = numPlanes
-    inputs['numFlows'] = numFlows
-    inputs['fileToSaveTo'] = "Data/" + "VariableConstHopsPopBased" + str(numSatellites)
+    inputs['fileToSaveTo'] = "Data/VariableConstLatencyPopBased/" + "VariableConstLatencyPopBased" + str(numSatellites)
 
     #create debug 
     print("Iteration # : " + str(i))

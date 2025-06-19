@@ -1,4 +1,12 @@
-
+            
+        num_top_flows = 100
+        flat_flows = flows_matrix[flows_matrix > 0]
+        
+        if len(flat_flows) > num_top_flows:
+            threshold_value = np.partition(flat_flows, -num_top_flows)[-num_top_flows]
+            flows_matrix[flows_matrix < threshold_value] = 0
+        else:
+            pass
 
 
 def build_plus_grid_connectivity(positions: np.ndarray,

@@ -19,7 +19,7 @@ def run_simulation(numFlows,
                    lr, 
                    fileToSaveTo,
                    metricToOptimize = "latency",
-                   demandDist = "random"):
+                   demandDist = "popBased"):
     #demand dist can be random or popBased
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
@@ -120,11 +120,14 @@ def run_simulation(numFlows,
 
         #filter out flows that are too small
         flat_data = flows_matrix.flatten()
-        percentile_value = np.percentile(flat_data, 92)
+        percentile_value = np.percentile(flat_data, 96)
         flows_matrix[flows_matrix < percentile_value] = 0
-            
-        #then, get source, dest, flow value components
+
         src_indices, dst_indices = np.nonzero(flows_matrix)
+
+        #scale it accordingly
+        scaling_factor = 1e6 / np.sum(flows_matrix)
+        flows_matrix *=scaling_factor
 
         # Use these indices to get the corresponding values from the matrix
         demandVals = torch.from_numpy(flows_matrix[src_indices, dst_indices]).float()
@@ -464,8 +467,14 @@ def run_simulation(numFlows,
 
     #plot grid+ baseline 
     # print("Creating grid+ plot with metrics")
-    # _, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
-    # myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
+    #pdb.set_trace()
+    
+    #_, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
+    #myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
+
+    # _, link_utilization, _= myUtils.calculate_network_metrics(c.astype(bool), T_store)
+    # myUtils.plot_connectivity(positions, c.astype(bool), link_utilization, figsize=(8,8))
+
 
     motifSumLatency, graph = calculate_min_metric(
         1,
@@ -488,8 +497,8 @@ def run_simulation(numFlows,
     #plot motif baseline 
     #myUtils.plot_connectivity(node_positions, conn, figsize=(8,8))
 
-    _, link_utilization, _= myUtils.calculate_network_metrics(conn, T_store)
-    myUtils.plot_connectivity(node_positions, conn, link_utilization, figsize=(8,8))
+    # _, link_utilization, _= myUtils.calculate_network_metrics(conn, T_store)
+    # myUtils.plot_connectivity(node_positions, conn, link_utilization, figsize=(8,8))
 
     #save all metrics to dictionary
     metrics = {}
@@ -499,6 +508,7 @@ def run_simulation(numFlows,
     metrics["Grid plus size weighted latency"] = float(gridPlusSumLatency)# / totalDemand)
     metrics["Motif size weighted latency"] = float(motifSumLatency)# / totalDemand)
     metrics["Total Demand"] = float(totalDemand)
+    metrics["Objective"] = str(metricToOptimize)
 
     writer.close()
 
@@ -564,13 +574,13 @@ def run_simulation(numFlows,
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=20, help='Number of flows')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of epochs')
-    parser.add_argument('--numSatellites', type=int, default=120, help='Number of satellites')
-    parser.add_argument('--orbitalPlanes', type=int, default=8, help='Number of orbital planes')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('--numSatellites', type=int, default=240, help='Number of satellites')
+    parser.add_argument('--orbitalPlanes', type=int, default=16, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
     parser.add_argument('--lr', type=float, default=0.03, help='Learning rate')
     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')
-    parser.add_argument('--metricToOptimize', type=str, default="latency", choices=['latency','hops'])
+    parser.add_argument('--metricToOptimize', type=str, default="hops", choices=['latency','hops'])
 
     args = parser.parse_args()
 
