@@ -25,8 +25,7 @@ inputs = {
     'epochs': 50, #200
     'lr': 0.030, #.03
     'fileToSaveTo': "RoutingLogitsSmallConst",
-    'metricToOptimize': "hops",
-    'demandDist': "popBased"
+    'metricToOptimize': "hops"
 } 
 
 #360, 24 
