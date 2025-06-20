@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import re
 import os
 
-data_dir = '../Data/'  # Assuming the script is run from the parent directory of 'Data'
+data_dir = '../Data/VariableConstHopPopBased'  # Assuming the script is run from the parent directory of 'Data'
 files = [f for f in os.listdir(data_dir) if f.endswith('.json')]
 
 x = []
@@ -15,7 +15,7 @@ motif_latencies = []
 
 for filename in sorted(files):
     #Change this line for each type of run / analysis
-    match = re.search(r'VariableConstHopsPopBased(\d+)', filename)
+    match = re.search(r'VariableConstHopPopBased(\d+)', filename)
     if match:
         flow_value = int(match.group(1))
         x.append(flow_value)
@@ -26,7 +26,7 @@ for filename in sorted(files):
             file_content = f.read()
 
             # Define the prefix to remove
-            prefix_to_remove = "VariableConstHopsPopBased"
+            prefix_to_remove = "VariableConstHopPopBased"
 
             # Check if the content starts with the prefix and remove it
             if file_content.startswith(prefix_to_remove):
@@ -44,14 +44,39 @@ for filename in sorted(files):
 
 # Sort all three lists based on the 'flows' values
 sorted_data = sorted(zip(x, my_method_latencies, grid_plus_latencies, motif_latencies))
-x, my_method_latencies, grid_plus_latencies, motif_latencies = zip(*sorted_data)
 
+x, my_method_latencies, grid_plus_latencies, motif_latencies = zip(*sorted_data)
+import numpy as np 
+x  = np.array(x)
 #pdb.set_trace()
 
-plt.figure(figsize=(10, 6))
-plt.plot(x, my_method_latencies, marker='o', label='Differential Method')
-plt.plot(x, grid_plus_latencies[1:], marker='x', label='Grid Plus')
-plt.plot(x, motif_latencies, marker='.', label='Motif')
+# plt.bar(x_pos + offset1, my_method_latencies_sorted, bar_width, label='Differential Method')
+# # Adjusted for the [1:] slicing if it's consistently needed for Grid Plus, otherwise use full list
+# # If grid_plus_latencies_sorted[1:] means the second value onwards, then x_pos[1:] should also be used
+# plt.bar(x_pos[1:] + offset2, grid_plus_latencies_sorted[1:], bar_width, label='Grid Plus')
+# plt.bar(x_pos + offset3, motif_latencies_sorted, bar_width, label='Motif')
+
+# # Set x-axis ticks to be at the center of each group of bars
+# # This is crucial for clear labeling of the x-axis values
+# plt.xticks(x_pos, x_sorted)
+
+plot = "barplot"
+if(plot == "barplot"):
+    bar_width = 5 # Increased from default 0.8 to 0.25 for a noticeable thickness
+
+    # Calculate the offsets for each set of bars so they don't overlap
+    # For 3 sets of bars, you typically want (bar_width * -1), 0, (bar_width * 1)
+    # or (bar_width * -1.5), (bar_width * -0.5), (bar_width * 0.5) for more spacing
+    offset1 = -bar_width
+    offset2 = 0 # Center bar
+    offset3 = bar_width
+
+    plt.figure(figsize=(10, 6)) # You might still want to adjust this for better visuals
+
+    plt.bar(x[1:] + offset1, my_method_latencies[1:], bar_width,label='Differential Method')
+    # Keep the [1:] slicing if it's intentional for Grid Plus data to skip the first point
+    plt.bar(x[1:] + offset2, grid_plus_latencies[1:] , bar_width,label='Grid Plus')
+    plt.bar(x[1:] + offset3, motif_latencies[1:], bar_width,label='Motif')
 
 plt.rcParams.update({
     'font.size': 16,          # Default font size

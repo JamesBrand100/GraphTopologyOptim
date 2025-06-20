@@ -67,6 +67,7 @@ def run_simulation(numFlows,
     writer = SummaryWriter(comment=f"_flows={numFlows}_gamma={gamma}")
 
 
+
     """Create node positions and demands"""
     positions, vecs = myUtils.generateWalkerStarConstellationPoints(numSatellites,
                                                 inclination,
@@ -103,6 +104,7 @@ def run_simulation(numFlows,
         res3Distances = np.linalg.norm(res3GridLocations[:, np.newaxis] - positions, axis=2)
         closest_idx = np.argmin(res3Distances, axis=1)
 
+        """Flow Generation"""
         #get argsum / closest satellite linked populations 
         satellitePopulations = np.bincount(closest_idx, weights=res3GridPops)
 
@@ -118,11 +120,7 @@ def run_simulation(numFlows,
         #remove symmetry so one can be "sources," one can be "destination" 
         flows_matrix = np.triu(flows_matrix)
 
-        #filter out flows that are too small
-        # flat_data = flows_matrix.flatten()
-        # percentile_value = np.percentile(flat_data, 96)
-        # flows_matrix[flows_matrix < percentile_value] = 0
-
+        #get top 500
         num_top_flows = 500
         flat_flows = flows_matrix[flows_matrix > 0]
         
@@ -140,12 +138,27 @@ def run_simulation(numFlows,
 
         # Use these indices to get the corresponding values from the matrix
         demandVals = torch.from_numpy(flows_matrix[src_indices, dst_indices]).float()
-        
-        # print(torch.max(demandVals))
-        # print(torch.sum(demandVals))
-        
-        # pdb.set_trace()
 
+        """Uplink/Downlink latency generation"""
+        #get argsum / closest satellite linked populations
+        row_indices = np.arange(res3Distances.shape[0])
+        closest_dist = res3Distances[row_indices, closest_idx] 
+
+        #then get the amount of latency traffic at each satellite 
+        weightedSatelliteLatencies = np.bincount(closest_idx, weights=res3GridPops*closest_dist/(3e8))
+
+        #normalize by satellite populations to get weighted latency to satellite 
+        satellitePopulations = np.bincount(closest_idx, weights=res3GridPops)
+        weightedSatelliteLatencies /= satellitePopulations + 1e-7
+
+        #then use outer product to expand with itself, modeling uplink and downlink together
+        weightedSatelliteLatencies = weightedSatelliteLatencies[:, np.newaxis] + weightedSatelliteLatencies[np.newaxis, :]
+
+        #then, get final uplink/downlink latency
+        uplinkDownlinkLatency = np.sum(weightedSatelliteLatencies * flows_matrix)
+
+
+    """Routing Ratio Preparations"""
     great_circle_prop = myUtils.great_circle_distance_matrix_cartesian(positions, 6.946e6) / (3e8)
     #great_circle_prop = torch.from_numpy(great_circle_prop).to(dtype=torch.float32).to(device) # NEW
 
@@ -196,11 +209,10 @@ def run_simulation(numFlows,
         [(connectivity_logits, connOpt)],
         epochs_to_track=2
     )
-
     reset = False
-
     lossArr = []
-
+    
+    """Gradient Descent Loop"""
     # ─── 6) Create differentiable process for learning beam allocations───────────────────────────────────────
     for epoch in range(epochs):
 
@@ -466,9 +478,7 @@ def run_simulation(numFlows,
                                                         int(numSatellites/orbitalPlanes))
 
     gridPlusConn = gridPlusConn*feasibleMask
-
     gridPlusProp = np.multiply(gridPlusConn, dmat)
-    #pdb.set_trace()
     gridPlusProp[gridPlusProp == 0] = 1000
     np.fill_diagonal(gridPlusProp, 0)
     gridPlusLatencyMat = myUtils.size_weighted_latency_matrix_networkx(gridPlusProp, T_store)
@@ -478,8 +488,8 @@ def run_simulation(numFlows,
     # print("Creating grid+ plot with metrics")
     #pdb.set_trace()
     
-    #_, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
-    #myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
+    _, link_utilization, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
+    myUtils.plot_connectivity(positions, gridPlusConn, link_utilization, figsize=(8,8))
 
     # _, link_utilization, _= myUtils.calculate_network_metrics(c.astype(bool), T_store)
     # myUtils.plot_connectivity(positions, c.astype(bool), link_utilization, figsize=(8,8))
@@ -518,6 +528,7 @@ def run_simulation(numFlows,
     metrics["Motif size weighted latency"] = float(motifSumLatency)# / totalDemand)
     metrics["Total Demand"] = float(totalDemand)
     metrics["Objective"] = str(metricToOptimize)
+    metrics["Latency Addendum"] = float(uplinkDownlinkLatency)
 
     writer.close()
 
@@ -583,7 +594,7 @@ def run_simulation(numFlows,
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=20, help='Number of flows')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=3, help='Number of epochs')
     parser.add_argument('--numSatellites', type=int, default=240, help='Number of satellites')
     parser.add_argument('--orbitalPlanes', type=int, default=16, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')

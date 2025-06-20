@@ -1,1 +1,1 @@
-{"Diagonal Symmetry Score": 1.0, "Row/Col Normalization Score": 0.9780497550964355, "My method size weighted latency": 394384.07419745164, "Grid plus size weighted latency": 727842.6720640067, "Motif size weighted latency": 499576.9375, "Total Demand": 9387292.0}
+{"Diagonal Symmetry Score": 1.0, "Row/Col Normalization Score": 0.9690843820571899, "My method size weighted latency": 43764.621347913766, "Grid plus size weighted latency": 80589.26301879389, "Motif size weighted latency": 55654.703125, "Total Demand": 1000000.0, "Objective": "latency"}
