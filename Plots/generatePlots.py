@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import re
 import os
 
-data_dir = '../Data/VariableConstHopPopBased'  # Assuming the script is run from the parent directory of 'Data'
+data_dir = '../Data/OffsetData'  # Assuming the script is run from the parent directory of 'Data'
 files = [f for f in os.listdir(data_dir) if f.endswith('.json')]
 
 x = []
@@ -60,7 +60,7 @@ x  = np.array(x)
 # # This is crucial for clear labeling of the x-axis values
 # plt.xticks(x_pos, x_sorted)
 
-plot = "barplot"
+plot = "lineplot"
 if(plot == "barplot"):
     bar_width = 5 # Increased from default 0.8 to 0.25 for a noticeable thickness
 
@@ -73,10 +73,20 @@ if(plot == "barplot"):
 
     plt.figure(figsize=(10, 6)) # You might still want to adjust this for better visuals
 
-    plt.bar(x[1:] + offset1, my_method_latencies[1:], bar_width,label='Differential Method')
+    plt.bar(x[1:] + offset1, my_method_latencies[1:], bar_width,label='GTopOpt')
     # Keep the [1:] slicing if it's intentional for Grid Plus data to skip the first point
     plt.bar(x[1:] + offset2, grid_plus_latencies[1:] , bar_width,label='Grid Plus')
     plt.bar(x[1:] + offset3, motif_latencies[1:], bar_width,label='Motif')
+
+if(plot == "lineplot"):
+    plt.plot(x[1:], my_method_latencies[1:], marker='o', label='GTopOpt')
+    plt.plot(x[1:], grid_plus_latencies[1:], marker='x', label='Grid Plus')
+    plt.plot(x[1:], motif_latencies[1:], marker='.', label='Motif')
+
+    plt.ylim(bottom=0)
+
+    #exit 
+
 
 plt.rcParams.update({
     'font.size': 16,          # Default font size

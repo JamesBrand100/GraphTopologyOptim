@@ -245,7 +245,7 @@ def run_simulation(numFlows,
         #logit conversion  
         connLogits = myUtils.build_full_logits(connectivity_logits, feasible_indices, feasibleMask.shape)
         connLogits = torch.nn.functional.softplus(connLogits)
-        c = myUtils.plus_sinkhorn(connLogits, num_iters=int(6*epoch/epochs + 1), normLim = beam_budget, temperature = int(3*epoch/epochs + 1))
+        c = myUtils.plus_sinkhorn(connLogits, num_iters=int(8*epoch/epochs + 1), normLim = beam_budget, temperature = int(4*epoch/epochs + 1))
         gamma = int(epoch/epochs + 1)
 
         # ─── Compute Routing matrix, R[i,d,i] ──────────────────────────────────────────────
@@ -452,8 +452,14 @@ def run_simulation(numFlows,
     normScore = myUtils.normalization_score(c, ref=4.0, epsilon=1e-8).detach().numpy()
 
     #hardcode / process connections 
-    c[c > 0.5] = 1
-    c[c < 0.5] = 0
+    c[c > 0.85] = 1
+    c[c < 0.85] = 0
+
+    postNormScore = myUtils.normalization_score(c, ref=4.0, epsilon=1e-8).detach().numpy()
+    c = c.detach().numpy()
+
+    print("Num violations:")
+    print(np.sum(np.sum(c,axis = 1) > 4))
 
     #process based on numpy components
     c = c.detach().numpy()
@@ -594,7 +600,7 @@ def run_simulation(numFlows,
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=20, help='Number of flows')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('--numSatellites', type=int, default=240, help='Number of satellites')
     parser.add_argument('--orbitalPlanes', type=int, default=16, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
