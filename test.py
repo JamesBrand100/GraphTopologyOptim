@@ -1,45 +1,55 @@
-import numpy as np
+import torch
+import math
 import matplotlib.pyplot as plt
-import os
+import numpy as np
+import myUtils
+import pdb
+from torch.utils.tensorboard import SummaryWriter   # <-- import
+import copy 
+import random
+import json
+import argparse
+from Baselines.funcedBaseline import *
 
-# Define the file path
-file_path = 'Data/exampleLoss360Hops.npy'
+import pdb
 
-# Check if the file exists
-if not os.path.exists(file_path):
-    print(f"Error: File not found at {file_path}")
-    exit()
+#training params
+gamma       = 3.0      # sharpness for alignment
 
-try:
-    # Load the loss data from the .npy file
-    loss_data = np.load(file_path)
+#simulation params 
+trafficScaling = 100000
+max_hops    = 20       # how many hops to unroll
+maxDemand   = 1.0
+#numFlows = 30
+beam_budget = 4      # sum of beam allocations per node
 
-    # The index will represent epochs.
-    # If loss_data is 1D, np.arange(len(loss_data)) gives the epoch numbers.
-    epochs = np.arange(len(loss_data))
+#constellation params 
+orbitRadius = 6.946e6   
+#numSatellites = 100
+#orbitalPlanes = 10
+inclination = 80 
+phasingParameter = 5
 
-    # Create the plot
-    plt.figure(figsize=(10, 6)) # Adjust figure size as needed
-    plt.plot(epochs, loss_data, linestyle='-', linewidth=6, color='blue') # Plot with circles and a line
+EARTH_MEAN_RADIUS = 6371.0e3
 
-    plt.rcParams.update({
-        'font.size': 16,          # Default font size
-        'axes.titlesize': 14,     # Title size
-        'axes.labelsize': 1200,     # Axis label size
-        'xtick.labelsize': 20,    # X-tick label size
-        'ytick.labelsize': 20,    # Y-tick label size
-        'legend.fontsize': 17     # Legend font size
-    })
+numSatellites =  200
+orbitalPlanes = 20
 
-    # Add labels and title
-    #plt.title('Training Loss over Epochs (360 Hops)')
-    plt.xlabel('Epoch', fontsize = 20)
-    plt.ylabel('Loss', fontsize = 20)
-    plt.grid(True) # Add a grid for readability
+positions, vecs = myUtils.generateWalkerStarConstellationPoints(numSatellites,
+                                                inclination,
+                                                orbitalPlanes,
+                                                phasingParameter,
+                                                orbitRadius)
+positions = np.reshape(positions, [np.shape(positions)[0]*np.shape(positions)[1], np.shape(positions)[2]])
 
-    # Show the plot
-    plt.tight_layout()
-    plt.show()
+gridPlusConn = myUtils.build_plus_grid_connectivity(positions,
+                                                    orbitalPlanes,
+                                                    int(numSatellites/orbitalPlanes))
 
-except Exception as e:
-    print(f"An error occurred while loading or plotting the data: {e}")
+#disconnect one satellite to see its effect  
+gridPlusConn[0,gridPlusConn[0]]  = False
+gridPlusConn[gridPlusConn[:,0],0] = False
+
+val, vec = myUtils.calculate_algebraic_connectivity(gridPlusConn)
+
+pdb.set_trace()

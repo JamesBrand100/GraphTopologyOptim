@@ -6,6 +6,10 @@ from scipy.spatial.distance import cdist
 from scipy.optimize import minimize
 from scipy.integrate import quad
 import matplotlib.cm as cm # Import colormap module
+from scipy.linalg import eigh # eigh is for symmetric/Hermitian matrices, which Laplacian is
+from collections import Counter
+# Import the specific flow algorithm module
+import networkx.algorithms.flow as flow
 
 # Geospatial tools
 import healpy as hp
@@ -237,6 +241,159 @@ def _get_tangent_vector(P1: torch.Tensor, P2: torch.Tensor) -> torch.Tensor:
     norm_val[norm_val == 0] = 1.0
     tangent_vector = raw_tangent_vector / norm_val
     return tangent_vector
+
+def hopEfficiencyMetric(
+    origin_points: torch.Tensor, # Shape (N, 3)
+    to_points_1: torch.Tensor,   # Shape (M, 3)
+    to_points_2: torch.Tensor    # Shape (K, 3)
+) -> torch.Tensor:
+    return
+
+
+def batch_similarity_metric_triangle_great_circle(
+    origin_points: torch.Tensor, # Shape (N, 3) - e_g
+    to_points_1: torch.Tensor,   # Shape (M, 3) - e_i
+    to_points_2: torch.Tensor,   # Shape (K, 3) - e_d
+    R_sphere: float = 6946000,             # Radius of the sphere
+    epsilon: float = 100 #1e-8        # Small constant for numerical stability in the denominator
+) -> torch.Tensor:
+    
+    N = origin_points.shape[0]
+    M = to_points_1.shape[0]
+    K = to_points_2.shape[0]
+    
+    #use concatenated vectors for full computation
+    gcd_g_d = great_circle_distance_matrix_cartesian(
+        np.concatenate([origin_points,to_points_2]),
+        R_sphere
+    )
+    #then take subset, to get vector origin to dest
+    gcd_g_d = gcd_g_d[0:len(origin_points), len(origin_points):]
+
+    #use concatenated vectors for full computation
+    gcd_i_d = great_circle_distance_matrix_cartesian(
+        np.concatenate([to_points_1,to_points_2]),
+        R_sphere
+    )
+    #then take subset, to get vector origin to dest
+    gcd_i_d = gcd_i_d[0:len(to_points_1), len(to_points_1):]
+
+    #use concatenated vectors for full computation
+    gcd_g_i = great_circle_distance_matrix_cartesian(
+        np.concatenate([origin_points,to_points_1]),
+        R_sphere
+    )
+    #then take subset, to get vector origin to dest
+    gcd_g_i = gcd_g_i[0:len(origin_points), len(origin_points):]
+
+    #then expand dimensionality 
+    gcd_g_d = gcd_g_d.unsqueeze(1) # Shape becomes (N, 1, K)
+    gcd_i_d = gcd_i_d.unsqueeze(0) # Shape becomes (1, M, K)
+    gcd_g_i = gcd_g_i.unsqueeze(2) # Shape becomes (N, M, 1)
+
+    #then, compute hop efficiency
+    hop_efficiency_metric = gcd_g_d/ (gcd_g_i + gcd_i_d + epsilon)
+
+    #then, set entries for going farther away to be equal to 0
+    hop_efficiency_metric[gcd_i_d > gcd_g_d] = 0
+    
+    #pdb.set_trace() 
+
+    return hop_efficiency_metric
+
+
+def batch_similarity_metric_new_v2(
+    origin_points: torch.Tensor, # Shape (N, 3) - e_g
+    to_points_1: torch.Tensor,   # Shape (M, 3) - e_i
+    to_points_2: torch.Tensor,   # Shape (K, 3) - e_d
+    R_sphere: float = 6946000,             # Radius of the sphere
+    epsilon: float = 100 #1e-8        # Small constant for numerical stability in the denominator
+) -> torch.Tensor:
+
+    #pdb.set_trace()
+
+    """
+    Computes the "hop efficiency" metric for all combinations of arcs.
+    The metric is defined as: alpha_g,i,d = GCD(e_g, e_d) / (GCD(e_i, e_d) + epsilon)
+
+    Args:
+        origin_points (torch.Tensor): Tensor of origin points (e_g). Shape (N, 3).
+        to_points_1 (torch.Tensor): Tensor of intermediate points (e_i). Shape (M, 3).
+        to_points_2 (torch.Tensor): Tensor of destination points (e_d). Shape (K, 3).
+        R_sphere (float): The radius of the sphere on which the points lie.
+        epsilon (float): Small constant added to the denominator for numerical stability
+                         when GCD(e_i, e_d) is zero or very close to zero.
+
+    Returns:
+        torch.Tensor: The hop efficiency metric. Shape (N, M, K).
+    """
+    N = origin_points.shape[0]
+    M = to_points_1.shape[0]
+    K = to_points_2.shape[0]
+
+    # --- Calculate GCD(e_g, e_d) ---
+    # This represents the GCD from each origin point (e_g) to each destination point (e_d).
+    # We need to broadcast origin_points (N, 3) and to_points_2 (K, 3)
+    # to compute all N*K pairwise distances.
+    # Unsqueeze origin_points to (N, 1, 3) and to_points_2 to (1, K, 3)
+    # The _great_circle_distance_xyz function will handle the dot product and arccos.
+    # Resulting shape: (N, K)
+    # gcd_g_d = great_circle_distance_matrix_cartesian(
+    #     origin_points.unsqueeze(1),  # (N, 1, 3)
+    #     to_points_2.unsqueeze(0),    # (1, K, 3)
+    #     R_sphere
+    # )
+
+    #use concatenated vectors for full computation
+    gcd_g_d = great_circle_distance_matrix_cartesian(
+        np.concatenate([origin_points,to_points_2]),
+        R_sphere
+    )
+    #then take subset, to get vector origin to dest
+    gcd_g_d = gcd_g_d[0:len(origin_points), len(origin_points):]
+
+    # --- Calculate GCD(e_i, e_d) ---
+    # This represents the GCD from each intermediate point (e_i) to each destination point (e_d).
+    # We need to broadcast to_points_1 (M, 3) and to_points_2 (K, 3)
+    # to compute all M*K pairwise distances.
+    # Unsqueeze to_points_1 to (M, 1, 3) and to_points_2 to (1, K, 3)
+    # Resulting shape: (M, K)
+    # gcd_i_d = great_circle_distance_matrix_cartesian(
+    #     to_points_1.unsqueeze(1),  # (M, 1, 3)
+    #     to_points_2.unsqueeze(0),  # (1, K, 3)
+    #     R_sphere
+    # )
+
+    #use concatenated vectors for full computation
+    gcd_i_d = great_circle_distance_matrix_cartesian(
+        np.concatenate([to_points_1,to_points_2]),
+        R_sphere
+    )
+    #then take subset, to get vector origin to dest
+    gcd_i_d = gcd_i_d[0:len(to_points_1), len(to_points_1):]
+
+    # --- Compute the hop efficiency metric: alpha_g,i,d = GCD(e_g, e_d) / (GCD(e_i, e_d) + epsilon) ---
+    # To get the final (N, M, K) shape, we need to expand dimensions for broadcasting.
+    # numerator: gcd_g_d has shape (N, K). Expand to (N, 1, K).
+    numerator = gcd_g_d.unsqueeze(1) # Shape becomes (N, 1, K)
+
+    # denominator: gcd_i_d has shape (M, K). Expand to (1, M, K).
+    # Add epsilon for numerical stability.
+    denominator = gcd_i_d.unsqueeze(0) + epsilon # Shape becomes (1, M, K)
+
+    # Perform the division. PyTorch's broadcasting rules will handle the expansion
+    # from (N, 1, K) / (1, M, K) to (N, M, K).
+    hop_efficiency_metric = denominator#/ denominator
+
+    #post processing for numerical stability. ensures we only use valid hops
+    #also ensures we dont have too extreme of ratio 
+    
+    #only take valid hops 
+    hop_efficiency_metric[numerator < denominator ] = 0
+
+    #hop_efficiency_metric[hop_efficiency_metric > 100] = 100
+
+    return hop_efficiency_metric
 
 def batch_similarity_metric_new(
     origin_points: torch.Tensor, # Shape (N, 3)
@@ -647,6 +804,7 @@ def build_plus_grid_connectivity(positions: np.ndarray,
         Connectivity matrix: C[i,j] = True if satellite i and j are joined
         by an ISL under the '+-grid' topology (2 in‐plane + 2 cross‐plane links).
     """
+
     N = num_planes * sats_per_plane
     assert positions.shape[0] == N, "positions must have num_planes * sats_per_plane rows"
     
@@ -876,7 +1034,8 @@ def plot_connectivity(positions: np.ndarray,
                       utilization: np.ndarray = None, 
                       figsize=(8,8), 
                       title_text = ": D",  
-                      gamma_value = 0.4 ):
+                      gamma_value = 0.8,
+                      maxUtil = None ):
     """
     Plot satellites as points and ISL links as lines in 3D.
     Link colors vary by utilization if provided; otherwise, they default to gray.
@@ -929,13 +1088,20 @@ def plot_connectivity(positions: np.ndarray,
             use_utilization_coloring = False # Fallback to default if all active utilizations are zero
         else:
 
-            #gamma_value = 0.4 # Experiment with this value (e.g., 0.1, 0.5)
-            norm = mcolors.PowerNorm(gamma=gamma_value, vmin=0, vmax=np.max(active_util_values))
-            colors = ["gray", "red"]
+            # #gamma_value = 0.4 # Experiment with this value (e.g., 0.1, 0.5)
+            if(maxUtil == None):
+                norm = mcolors.PowerNorm(gamma=0.4, vmin=0, vmax=np.max(active_util_values))
+            else:
+                norm = mcolors.PowerNorm(gamma=0.4, vmin=0, vmax=maxUtil)
 
-            # Create the custom colormap
-            # The 'name' parameter is optional but good practice
-            cmap = mcolors.LinearSegmentedColormap.from_list("BluePurpleRed", colors)
+
+            # colors = ["gray", "red"]
+
+            # # Create the custom colormap
+            # # The 'name' parameter is optional but good practice
+            # cmap = mcolors.LinearSegmentedColormap.from_list("BluePurpleRed", colors)
+
+            cmap = plt.get_cmap('Reds')
 
             #normalized_utilization = active_util_values / np.max(active_util_values)
             # Create a full normalized matrix for easier lookup during plotting
@@ -945,6 +1111,8 @@ def plot_connectivity(positions: np.ndarray,
             max_util_for_colorbar = np.max(active_util_values)
             link_default_linewidth = 1.5 # Restore original linewidth for default
 
+            #pdb.set_trace()
+
     else:
         # Default settings if utilization is not provided or all active links have zero utilization
         link_default_color = 'gray'
@@ -952,7 +1120,7 @@ def plot_connectivity(positions: np.ndarray,
 
     # Plot links
     N = positions.shape[0]
-    for i in range(N):
+    for i in range(N):  
         for j in range(i + 1, N): # To avoid plotting each link twice
             if C[i, j]: # If a link exists
                 xline = [positions[i,0], positions[j,0]]
@@ -963,7 +1131,7 @@ def plot_connectivity(positions: np.ndarray,
                     # Get the normalized utilization for this link
                     # Use the stored normalized value
                     link_norm_util = max(full_normalized_utilization[i, j], full_normalized_utilization[j, i]) 
-                    link_color = cmap(link_norm_util)[:-1] + (link_norm_util**0.8,) 
+                    link_color = cmap(link_norm_util)[:-1] + (link_norm_util**gamma_value,) 
 
                     ax.plot(xline, yline, zline, color=link_color, linewidth=3)
                 else:
@@ -982,10 +1150,6 @@ def plot_connectivity(positions: np.ndarray,
     ax.set_ylim(-axis_length/1.5, axis_length/1.5)
     ax.set_zlim(-axis_length/1.5, axis_length/1.5)
 
-    # ax.set_xlim()
-    # ax.set_ylim()
-    # ax.set_zlim()
-    
     # No explicit legend for satellites if we're not using 'label' in scatter for color conflict
     # ax.legend() # Re-add if you put label back and handle it
 
@@ -995,22 +1159,41 @@ def plot_connectivity(positions: np.ndarray,
     ax.axis('off')
     #ax.set_title(title_text, fontsize=20)
     ax.grid(False)
+    
+    #ax.set_facecolor("Grey")
+    #ax.set_facecolor("#a8a8a8")
+    #plt.gca().set_facecolor('#f0f0f0')
+    #plt.gcf().set_facecolor("#a8a8a8") 
 
-    # Add a colorbar only if utilization coloring is applied
-    # if use_utilization_coloring:
-    #     sm = cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max_util_for_colorbar))
-    #     sm.set_array([]) # Or set to original utilization values if you want it to be populated
-    #     cbar = fig.colorbar(sm, ax=ax, shrink=0.5, aspect=10, pad=0.05)
-    #     cbar.set_label('Link Utilization', rotation=270, labelpad=15)
-
-
-    # Add a colorbar only if utilization coloring is applied
     if use_utilization_coloring:
         # Crucially, pass the SAME `norm` object to ScalarMappable
         sm = cm.ScalarMappable(cmap=cmap, norm=norm) # Use the PowerNorm object
         sm.set_array(active_util_values) # Set the original values for the colorbar to map
-        cbar = fig.colorbar(sm, ax=ax, shrink=0.4, aspect=10, pad=0.01)
-        cbar.set_label('Link Utilization (Bytes)', rotation=270, labelpad=15)
+
+        cbar = fig.colorbar(sm, ax=ax, shrink=1, aspect=30, pad=0, orientation='horizontal')
+
+        cbar.set_label('Link Utilization (Bytes)', rotation=0, labelpad=5) # No rotation, smaller pad
+
+        # 1. Get the formatter for the colorbar's ticks
+        formatter = cbar.formatter
+
+        # 2. Set the threshold for scientific notation
+        #    'useOffset': False (removes the addition/subtraction of a constant from labels)
+        #    'useMathText': True (renders exponents nicely with LaTeX-like math text)
+        #    'scilimits': (lower, upper)
+        #       Numbers with magnitude outside this range will be shown in scientific notation.
+        #       e.g., (-2, 2) means numbers < 0.01 or > 100 will be scientific.
+        #       Your numbers are large (20000), so if you set (0, 4) this means numbers outside
+        #       10^0 and 10^4 (i.e., outside 1 and 10000) will use scientific.
+        #       If you want 20000 to be scientific, you might set it to (0, 3) or similar.
+        #       Let's try (0, 3) to convert 1000 and above to scientific.
+        formatter.set_powerlimits((0, 3)) # Numbers outside [10^0, 10^3] (i.e., <1 or >1000) use scientific notation
+        formatter.set_scientific(True) # Force scientific notation if conditions met
+        formatter.set_useOffset(False) # Prevents offset (e.g. +1e5) if you don't want it
+        formatter.set_useMathText(True) # Renders "x 10^y" nicely
+
+        # 3. Update the colorbar's tick labels with the new formatter settings
+        cbar.update_ticks()
 
     fig.subplots_adjust(left=0.2, right=0.8, bottom=0.01, top=0.95) # Adjusted for 3D plot
 
@@ -1524,4 +1707,191 @@ def plot_loss(epochs, losses):
     plt.grid(True, linestyle='--', alpha=0.6) # Can override global grid settings if needed
     plt.legend(loc='upper right', frameon=True, shadow=True, borderpad=1) # Customize legend
     plt.tight_layout() # Adjust plot parameters for a tight layout
+    plt.show()
+
+def calculate_algebraic_connectivity_torch(adj_matrix: torch.Tensor) -> torch.Tensor:
+    if not isinstance(adj_matrix, torch.Tensor):
+        raise TypeError("Input adj_matrix must be a PyTorch tensor.")
+    
+    if adj_matrix.ndim != 2 or adj_matrix.shape[0] != adj_matrix.shape[1] or adj_matrix.shape[0] == 0:
+        raise ValueError("Adjacency matrix must be a non-empty square 2D tensor.")
+
+    if adj_matrix.dtype not in (torch.float32, torch.float64):
+        adj_matrix = adj_matrix.to(torch.float32) # Or torch.float64 for higher precision
+
+    num_vertices = adj_matrix.shape[0]
+
+    if num_vertices < 2:
+        return torch.tensor(0.0, dtype=adj_matrix.dtype, device=adj_matrix.device)
+
+    degrees = torch.sum(adj_matrix, dim=1)
+    D = torch.diag_embed(degrees)
+
+    L = D - adj_matrix
+    eigenvalues = torch.linalg.eigh(L).eigenvalues
+
+    algebraic_connectivity = eigenvalues[1]
+
+    return algebraic_connectivity
+
+def calculate_generalized_algebraic_connectivity_torch(
+    adj_matrix: torch.Tensor,
+    node_importance_matrix_M: torch.Tensor
+) -> torch.Tensor:
+
+    num_vertices = adj_matrix.shape[0]
+
+    if num_vertices < 2:
+        return torch.tensor(0.0, dtype=adj_matrix.dtype, device=adj_matrix.device)
+
+    degrees = torch.sum(adj_matrix, dim=1)
+    D = torch.diag_embed(degrees)
+
+    L = D - adj_matrix
+
+    # --- Transformation for Generalized Eigenvalue Problem ---
+    M_diag = torch.diag(node_importance_matrix_M)
+    M_diag_sqrt_inv = 1.0 / torch.sqrt(M_diag)
+    M_sqrt_inv = torch.diag_embed(M_diag_sqrt_inv) # This is M^(-1/2)
+
+    L_prime = M_sqrt_inv @ L @ M_sqrt_inv
+
+    eigenvalues = torch.linalg.eigh(L_prime).eigenvalues
+    
+    generalized_algebraic_connectivity = eigenvalues[1]
+
+    return generalized_algebraic_connectivity
+
+
+def calculate_algebraic_connectivity(adj_matrix):
+    """
+    Calculates the algebraic connectivity of a graph given its adjacency matrix.
+
+    Args:
+        adj_matrix (numpy.ndarray): A square 2D numpy array representing the
+                                    adjacency matrix of the graph.
+                                    Assumes it's an undirected graph (symmetric).
+
+    Returns:
+        float: The algebraic connectivity (Fiedler value) of the graph.
+               Returns 0.0 if the graph is disconnected (or has multiple components),
+               as the second smallest eigenvalue would be 0 in such cases.
+               Returns None if the input is not a square matrix or is empty.
+    """
+    #adj_matrix = np.asarray(adj_matrix) # Ensure it's a numpy array
+
+    # Check if the matrix is square and non-empty
+    if adj_matrix.ndim != 2 or adj_matrix.shape[0] != adj_matrix.shape[1] or adj_matrix.shape[0] == 0:
+        print("Error: Adjacency matrix must be a non-empty square matrix.")
+        return None
+
+    num_vertices = adj_matrix.shape[0]
+
+    # 1. Construct the Degree Matrix (D)
+    # The degree of each vertex is the sum of its row (or column) in the adjacency matrix.
+    degrees = np.sum(adj_matrix, axis=1)
+    D = np.diag(degrees)
+
+    # 2. Construct the Laplacian Matrix (L = D - A)
+    L = D - adj_matrix
+
+    # 3. Calculate the eigenvalues of the Laplacian Matrix
+    # Using eigh for symmetric matrices is more efficient and numerically stable.
+    # It returns eigenvalues in ascending order.
+    eigenvalues, eigenvectors = eigh(L)#, eigvals_only=True)
+
+    # 4. Identify the Algebraic Connectivity
+    # For a connected graph, the smallest eigenvalue is 0.
+    # The algebraic connectivity is the second smallest eigenvalue.
+    # We should account for potential floating-point inaccuracies
+    # by checking if the first eigenvalue is very close to zero.
+
+    if len(eigenvalues) < 2:
+        # This case should ideally not happen for valid graphs with at least 1 vertex
+        # but handles edge cases like 1x1 matrix.
+        return 0.0 if len(eigenvalues) == 1 and np.isclose(eigenvalues[0], 0) else None
+
+    # Sort eigenvalues (eigh already does this) and pick the second one.
+    # We use a small tolerance to consider values very close to zero as zero.
+    
+    # Filter out eigenvalues very close to zero to properly identify the second smallest non-zero one
+    non_zero_eigenvalues = eigenvalues[~np.isclose(eigenvalues, 0, atol=1e-9)]
+    
+    if len(non_zero_eigenvalues) == 0:
+        # This implies all eigenvalues are zero, which is generally incorrect for a graph
+        # unless it's a null graph or a single isolated vertex.
+        return 0.0
+    elif len(non_zero_eigenvalues) == 1:
+        # If only one non-zero eigenvalue, the graph might be simple (e.g., K2)
+        # or it means the graph is disconnected and the "second smallest" is still 0.
+        # The true algebraic connectivity for a disconnected graph is 0.
+        # In this specific context, the second smallest value in the sorted list (including 0s) is
+        # the correct one to pick after the first 0.
+        return eigenvalues[1] # If eigenvalues[0] is 0, this is the second smallest.
+    else:
+        # If there are multiple distinct non-zero eigenvalues, the smallest of them is the Fiedler value.
+        # Since eigh sorts them, eigenvalues[1] will be the second smallest overall.
+        return eigenvalues[1], eigenvectors[1]
+    
+
+def plot_edge_disjoint_paths_histogram(adj_matrix):
+    """
+    Calculates the number of edge-disjoint paths for all pairs in a graph
+    defined by an adjacency matrix and plots a histogram of the results.
+
+    This version uses the max-flow min-cut theorem and specifies the
+    Edmonds-Karp algorithm for performance.
+
+    Args:
+        adj_matrix (list of lists or numpy array): The adjacency matrix of the graph.
+    """
+    # Create a graph from the adjacency matrix. For unweighted graphs,
+    # networkx automatically assumes a capacity of 1 for each edge.
+    G = nx.from_numpy_array(np.array(adj_matrix), edge_attr='capacity')
+    
+    # Get all unique pairs of nodes
+    nodes = list(G.nodes())
+    pairs = [(nodes[i], nodes[j]) for i in range(len(nodes)) for j in range(i + 1, len(nodes))]
+
+    # Calculate the number of edge-disjoint paths for each pair using max flow
+    path_counts = []
+    print("Calculating edge-disjoint paths for all pairs...")
+    for s, t in pairs:
+        # The number of edge-disjoint paths equals the max flow in a unit-capacity network.
+        # We specify Edmonds-Karp as requested.
+        num_paths = nx.maximum_flow_value(G, s, t, flow_func=flow.edmonds_karp)
+        path_counts.append(num_paths)
+    print("Calculation complete.")
+
+    # Count the frequency of each number of paths
+    histogram_data = Counter(path_counts)
+
+    # Prepare data for plotting
+    paths = list(histogram_data.keys())
+    counts = list(histogram_data.values())
+    
+    if not paths:
+        print("No node pairs found or graph is empty.")
+        return
+
+    # --- Plotting the Histogram ---
+    plt.figure(figsize=(10, 6))
+    bar_container = plt.bar(paths, counts, color='teal', width=0.8)
+
+    plt.xlabel("Number of Edge-Disjoint Paths", fontsize=12)
+    plt.ylabel("Number of Satellite Pairs", fontsize=12)
+    plt.title("Histogram of Edge-Disjoint Paths per Pair (using Edmonds-Karp)", fontsize=14)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.bar_label(bar_container, fmt='{:,.0f}') # Add labels on top of bars
+    
+    # Set x-axis ticks to be integers for clarity
+    max_paths = max(paths)
+    plt.xticks(range(max_paths + 2))
+    plt.xlim(-0.5, max_paths + 1.5)
+
+    print("\n--- Histogram Data ---")
+    print("(Number of Paths: Number of Pairs)")
+    for path, count in sorted(histogram_data.items()):
+        print(f"({path}, {count})")
+
     plt.show()

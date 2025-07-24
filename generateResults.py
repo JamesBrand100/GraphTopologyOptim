@@ -43,7 +43,7 @@ for i in range(1,11):
     #update inputs 
     inputs['numSatellites'] = numSatellites
     inputs['orbitalPlanes'] = numPlanes
-    inputs['fileToSaveTo'] = "Data/" + "VariableConstHopPopBased" + str(numSatellites)
+    inputs['fileToSaveTo'] = "Data/" + "VariableConstLatencyBasedGCDLogit" + str(numSatellites)
 
     #create debug 
     print("Iteration # : " + str(i))
