@@ -195,9 +195,10 @@ def batch_tangent_vectors(base, target):
     Returns:
         tangent vectors of shape (..., 3)
     """
-    dot = np.sum(base * target, axis=-1, keepdims=True)          # (..., 1)
+    dot = np.sum(base * target, axis=-1, keepdims=True)   #multiply individual components, then sum to get final dont proudct, (..., 1)
     proj = target - dot * base                                    # (..., 3)
     norm = np.linalg.norm(proj, axis=-1, keepdims=True) + 1e-9    # avoid division by 0
+    
     return proj / norm
 
 def batch_similarity_metric(A, B, C):
@@ -207,6 +208,12 @@ def batch_similarity_metric(A, B, C):
 
     α(A,B,C) = cosine between the tangent vector at A toward B and toward C
     """
+    #normalize all inputs directly before processing 
+    A = A / np.linalg.norm(A, axis=-1, keepdims=True)
+    B = B / np.linalg.norm(B, axis=-1, keepdims=True)
+    C = C / np.linalg.norm(C, axis=-1, keepdims=True)
+
+    #pdb.set_trace()
     A = A[:, None, None, :]     # shape (n,1,1,3)
     B = B[None, :, None, :]     # shape (1,m,1,3)
     C = C[None, None, :, :]     # shape (1,1,k,3)
@@ -224,6 +231,13 @@ def batch_similarity_metric(A, B, C):
     d_AB = np.linalg.norm(B - A, axis=-1)   # (n,m,1)
     d_AC = np.linalg.norm(C - A, axis=-1)   # (n,1,k)
 
+    # hold = sim.flatten()
+    # plt.title("Similarity Metric Dist. Old")
+    # plt.hist(hold,bins=10)
+    # plt.show()
+
+    # pdb.set_trace()
+
     # mask = True where we should *keep* α, i.e. only if dist(A→B) >= dist(A→C)
     keep = (d_AB >= d_AC)
 
@@ -232,6 +246,7 @@ def batch_similarity_metric(A, B, C):
 
     return torch.tensor(sim, dtype=torch.float32)
 
+#generate vector on subspace of P1 and P2, normalized and perpendicular to P1 
 def _get_tangent_vector(P1: torch.Tensor, P2: torch.Tensor) -> torch.Tensor:
     P1_norm = torch.nn.functional.normalize(P1, p=2, dim=-1)
     P2_norm = torch.nn.functional.normalize(P2, p=2, dim=-1)
@@ -252,8 +267,8 @@ def hopEfficiencyMetric(
 
 def batch_similarity_metric_triangle_great_circle(
     origin_points: torch.Tensor, # Shape (N, 3) - e_g
-    to_points_1: torch.Tensor,   # Shape (M, 3) - e_i
-    to_points_2: torch.Tensor,   # Shape (K, 3) - e_d
+    to_points_2: torch.Tensor,   # Shape (M, 3) - e_i
+    to_points_1: torch.Tensor,   # Shape (K, 3) - e_d
     R_sphere: float = 6946000,             # Radius of the sphere
     epsilon: float = 100 #1e-8        # Small constant for numerical stability in the denominator
 ) -> torch.Tensor:
@@ -296,8 +311,12 @@ def batch_similarity_metric_triangle_great_circle(
 
     #then, set entries for going farther away to be equal to 0
     hop_efficiency_metric[gcd_i_d > gcd_g_d] = 0
-    
+
     #pdb.set_trace() 
+
+    #try this with maximization... possibly...
+
+    hop_efficiency_metric = np.reshape(hop_efficiency_metric, [N,K,M])
 
     return hop_efficiency_metric
 

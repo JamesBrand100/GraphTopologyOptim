@@ -150,7 +150,6 @@ def run_simulation(numFlows,
         #then, get final uplink/downlink latency
         uplinkDownlinkLatency = np.sum(weightedSatelliteLatencies * flows_matrix)
 
-
     """Routing Ratio Preparations"""
     great_circle_prop = myUtils.great_circle_distance_matrix_cartesian(positions, 6.946e6) / (3e8)
     #great_circle_prop = torch.from_numpy(great_circle_prop).to(dtype=torch.float32).to(device) # NEW
@@ -169,17 +168,25 @@ def run_simulation(numFlows,
     #positions = torch.from_numpy(positions)
     
     #newer similarity metric computation
-    #similarityMetric = myUtils.batch_similarity_metric_triangle_great_circle(positions, positions[dst_indices], positions).float()
+    similarityMetric = myUtils.batch_similarity_metric_triangle_great_circle(positions, positions[dst_indices], positions).float()
 
     #old computation for sim metric 
-    similarityMetric = myUtils.batch_similarity_metric(positions, positions[dst_indices], positions)
+    #similarityMetric = myUtils.batch_similarity_metric(positions, positions[dst_indices], positions)
 
-    hold = similarityMetric.flatten()
-    plt.title("Similarity Metric Dist. Old")
-    plt.hist(hold,bins=10)
-    plt.show()
+    #pdb.set_trace()
 
-    pdb.set_trace()
+    #plot points to see
+    # fig = plt.figure(figsize=(9,9))
+    # ax = fig.add_subplot(111, projection='3d')
+    # sc = ax.scatter(positions[:,0], positions[:,1], positions[:,2], s=30)
+    # plt.show()
+
+    # hold = similarityMetric.flatten()
+    # plt.title("Similarity Metric Dist. Old")
+    # plt.hist(hold,bins=10)
+    # plt.show()
+
+    # pdb.set_trace()
 
 
 
@@ -241,7 +248,7 @@ def run_simulation(numFlows,
         connLogits = myUtils.build_full_logits(connectivity_logits, feasible_indices, feasibleMask.shape)
         connLogits = torch.nn.functional.softplus(connLogits)
         c = myUtils.plus_sinkhorn(connLogits, num_iters=int(8*epoch/epochs + 1), normLim = beam_budget, temperature = int(4*epoch/epochs + 1))
-        gamma = int(epoch/epochs + 1)
+        gamma = 6 * int(epoch/epochs + 1)
 
         # ─── Compute Routing matrix, R[i,d,i] ──────────────────────────────────────────────
         if routingMethod == "LOSweight":
@@ -584,9 +591,9 @@ def run_simulation(numFlows,
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=20, help='Number of flows')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('--numSatellites', type=int, default=280, help='Number of satellites')
-    parser.add_argument('--orbitalPlanes', type=int, default=20, help='Number of orbital planes')
+    parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
+    parser.add_argument('--numSatellites', type=int, default=120, help='Number of satellites')
+    parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
     parser.add_argument('--lr', type=float, default=0.03, help='Learning rate')
     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')

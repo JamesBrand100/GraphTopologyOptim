@@ -174,7 +174,7 @@ def run_simulation(numFlows,
 
     #new computation for sim metric 
     positions = torch.from_numpy(positions)
-    similarityMetric = myUtils.batch_similarity_metric_new(positions, positions[dst_indices], positions).float()
+    #similarityMetric = myUtils.batch_similarity_metric_new(positions, positions[dst_indices], positions).float()
 
     #old computation for sim metric 
     #similarityMetric = myUtils.batch_similarity_metric(positions, positions[dst_indices], positions)
