@@ -19,7 +19,8 @@ def run_simulation(numFlows,
                    lr, 
                    fileToSaveTo,
                    metricToOptimize = "latency",
-                   demandDist = "popBased"):
+                   demandDist = "popBased",
+                   inLineness = "GCD"):
     #demand dist can be random or popBased
 
     # --- 0) Define Device (NEW) ---------------------------------------------------
@@ -54,7 +55,7 @@ def run_simulation(numFlows,
     orbitRadius = 6.946e6   
     #numSatellites = 100
     #orbitalPlanes = 10
-    inclination = 80 
+    inclination = 90 #used to be 80  
     phasingParameter = 5
 
     EARTH_MEAN_RADIUS = 6371.0e3
@@ -167,11 +168,12 @@ def run_simulation(numFlows,
     #new computation for sim metric 
     #positions = torch.from_numpy(positions)
     
-    #newer similarity metric computation
-    similarityMetric = myUtils.batch_similarity_metric_triangle_great_circle(positions, positions[dst_indices], positions).float()
-
-    #old computation for sim metric 
-    #similarityMetric = myUtils.batch_similarity_metric(positions, positions[dst_indices], positions)
+    if(inLineness == "GCD"):
+        #newer similarity metric computation
+        similarityMetric = myUtils.batch_similarity_metric_triangle_great_circle(positions, positions[dst_indices], positions).float()
+    if(inLineness == "angle"):
+        #old computation for sim metric 
+        similarityMetric = myUtils.batch_similarity_metric(positions, positions[dst_indices], positions)
 
     #pdb.set_trace()
 
@@ -248,12 +250,16 @@ def run_simulation(numFlows,
         connLogits = myUtils.build_full_logits(connectivity_logits, feasible_indices, feasibleMask.shape)
         connLogits = torch.nn.functional.softplus(connLogits)
         c = myUtils.plus_sinkhorn(connLogits, num_iters=int(8*epoch/epochs + 1), normLim = beam_budget, temperature = int(4*epoch/epochs + 1))
-        gamma = 6 * int(epoch/epochs + 1)
+        gamma = 3 * int(epoch/epochs + 1)
 
         # ─── Compute Routing matrix, R[i,d,i] ──────────────────────────────────────────────
         if routingMethod == "LOSweight":
-            alpha_sharp = similarityMetric ** gamma
-            numer = c.unsqueeze(1) * alpha_sharp     # [i,d,i] 
+            #alpha_sharp = similarityMetric ** gamma
+            #numer = c.unsqueeze(1) * alpha_sharp     # [i,d,i] 
+
+            #alpha_sharp = similarityMetric ** gamma
+            numer = (c.unsqueeze(1) * similarityMetric ) ** gamma     # [i,d,i] 
+
             denom = numer.sum(dim=2, keepdim=True)    # [i,d,1] 
             Rsub = numer / (denom + 1e-15)                # [i,d,i] 
 
@@ -441,12 +447,13 @@ def run_simulation(numFlows,
     print("Num violations:")
     print(np.sum(np.sum(c,axis = 1) > 4))
 
+    #post processing for diff method 
     #compute weighted latency for my method 
     #create distance based on combined conn. & distance 
     diffMethodProp = np.multiply(c, dmat )
     #simulate lack of conn. with high # 
     diffMethodProp[diffMethodProp == 0] = 1000
-    #replace diagonal with 0 to prevent self loops
+    diffMethodProp[np.isnan(diffMethodProp)] = 1000
     np.fill_diagonal(diffMethodProp, 0)
     #compute latency 
     diffMethodLatencyMat = myUtils.size_weighted_latency_matrix_networkx(diffMethodProp, T_store)
@@ -458,35 +465,16 @@ def run_simulation(numFlows,
                                                         orbitalPlanes,
                                                         int(numSatellites/orbitalPlanes))
 
+    #post processing for gridPlusConn
     gridPlusConn = gridPlusConn*feasibleMask
     gridPlusProp = np.multiply(gridPlusConn, dmat)
     gridPlusProp[gridPlusProp == 0] = 1000
+    gridPlusProp[np.isnan(gridPlusProp)] = 1000
     np.fill_diagonal(gridPlusProp, 0)
     gridPlusLatencyMat = myUtils.size_weighted_latency_matrix_networkx(gridPlusProp, T_store)
     gridPlusSumLatency = np.sum(gridPlusLatencyMat)
 
-    #plot grid+ baseline 
-    # print("Creating grid+ plot with metrics")
-    #pdb.set_trace()
-    
-    _, link_utilization_gplus, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
-    #myUtils.plot_connectivity(positions, gridPlusConn, link_utilization_gplus, figsize=(8,8))
-    #myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn)
-
-    _, link_utilization_diff, _= myUtils.calculate_network_metrics(c.astype(bool), T_store)
-    #myUtils.plot_connectivity(positions, c.astype(bool), link_utilization_diff, figsize=(8,8))
-    #myUtils.plot_edge_disjoint_paths_histogram(c.astype(bool))
-
-    #pdb.set_trace()
-
-    # Save the arrays
-    np.savez("linkUtilData.npz",
-            positions=positions,
-            gridPlusConn=gridPlusConn,
-            c=c,
-            link_utilization_gplus=link_utilization_gplus,
-            link_utilization_diff=link_utilization_diff)
-    
+    #get motif data     
     motifSumLatency, graph = calculate_min_metric(
         1,
         numSatellites,
@@ -511,6 +499,31 @@ def run_simulation(numFlows,
     # _, link_utilization, _= myUtils.calculate_network_metrics(conn, T_store)
     # myUtils.plot_connectivity(node_positions, conn, link_utilization, figsize=(8,8))
 
+    #plot components for each of the approaches 
+
+    _, link_utilization_gplus, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
+    #myUtils.plot_connectivity(positions, gridPlusConn, link_utilization_gplus, figsize=(8,8))
+    #myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn)
+
+    _, link_utilization_motif, _= myUtils.calculate_network_metrics(conn.astype(bool), T_store)
+    myUtils.plot_connectivity(positions, conn, link_utilization_motif, figsize=(8,8))
+
+    #compare data from motif to grid plus 
+    pdb.set_trace()
+    #myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn)
+
+    _, link_utilization_diff, _= myUtils.calculate_network_metrics(c.astype(bool), T_store)
+    myUtils.plot_connectivity(positions, c.astype(bool), link_utilization_diff, figsize=(8,8), maxUtil = np.max(link_utilization_gplus))
+    #myUtils.plot_edge_disjoint_paths_histogram(c.astype(bool))
+
+    # Save the arrays
+    np.savez("linkUtilData.npz",
+            positions=positions,
+            gridPlusConn=gridPlusConn,
+            c=c,
+            link_utilization_gplus=link_utilization_gplus,
+            link_utilization_diff=link_utilization_diff)
+
     #save all metrics to dictionary
     metrics = {}
     metrics["Diagonal Symmetry Score"] = float(diagSym) 
@@ -528,6 +541,10 @@ def run_simulation(numFlows,
     print("Diff Method: "+str(diffSumLatency))
     print("Grid plus: "+str(gridPlusSumLatency))
     print("Motif: "+str(motifSumLatency))
+
+    print(str(diffSumLatency/ totalDemand))
+    print(str(gridPlusSumLatency/ totalDemand))
+    print(str(motifSumLatency/ totalDemand))
 
     # Save the dictionary to a file, if we give a proper name 
     if(fileToSaveTo != "None"):
@@ -591,9 +608,9 @@ def run_simulation(numFlows,
 def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=20, help='Number of flows')
-    parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--numSatellites', type=int, default=120, help='Number of satellites')
-    parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
+    parser.add_argument('--epochs', type=int, default=2, help='Number of epochs')
+    parser.add_argument('--numSatellites', type=int, default=225, help='Number of satellites')
+    parser.add_argument('--orbitalPlanes', type=int, default=15, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
     parser.add_argument('--lr', type=float, default=0.03, help='Learning rate')
     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')

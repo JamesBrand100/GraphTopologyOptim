@@ -117,7 +117,7 @@ plt.rcParams.update({
 
 #plt.title('Hops * Traffic vs. Number of Satellites')
 plt.xlabel('Number of Satellites', fontsize = 16)
-plt.ylabel('Weighted Network Delay (hops)', fontsize = 16)
+plt.ylabel('Weighted Network Delay (seconds)', fontsize = 16)
 plt.grid(True)
 plt.legend()
 plt.tight_layout()

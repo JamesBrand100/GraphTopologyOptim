@@ -312,6 +312,9 @@ def batch_similarity_metric_triangle_great_circle(
     #then, set entries for going farther away to be equal to 0
     hop_efficiency_metric[gcd_i_d > gcd_g_d] = 0
 
+    #set negative values to be 0
+    #hop_efficiency_metric[hop_efficiency_metric < 0] = 0
+
     #pdb.set_trace() 
 
     #try this with maximization... possibly...

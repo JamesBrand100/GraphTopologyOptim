@@ -25,15 +25,35 @@ inputs = {
     'epochs': 100, #200
     'lr': 0.030, #.03
     'fileToSaveTo': "RoutingLogitsSmallConst",
-    'metricToOptimize': "latency",
-    'demandDist' : "popBased"
+    'metricToOptimize': "hops",
+    'demandDist' : "popBased",
+    'inLineness' : "GCD"
 } 
 
 #360, 24 
 #thought: we might have been using LearnedLogits for this.... nah that was before .
 
 #then, iterate over and modify inputs  
-for i in range(1,11): 
+for i in range(1,10): 
+    #store numSatellites 
+    numSatellites = 40*i 
+
+    #get # orbital planes 
+    numPlanes = myUtils.find_closest_divisor_to_sqrt(numSatellites)
+
+    #update inputs 
+    inputs['numSatellites'] = numSatellites
+    inputs['orbitalPlanes'] = numPlanes
+    inputs['fileToSaveTo'] = "Data/" + "VariableConstHopsBasedGCDLogit" + str(numSatellites)
+
+    #create debug 
+    print("Iteration # : " + str(i))
+    
+    #run the function for generating the simulation <3 
+    run_simulation(**inputs)
+
+#then, iterate over and modify inputs  
+for i in range(1,10): 
     #store numSatellites 
     numSatellites = 40*i 
 
@@ -44,6 +64,7 @@ for i in range(1,11):
     inputs['numSatellites'] = numSatellites
     inputs['orbitalPlanes'] = numPlanes
     inputs['fileToSaveTo'] = "Data/" + "VariableConstLatencyBasedGCDLogit" + str(numSatellites)
+    inputs['metricToOptimize'] = "latency"
 
     #create debug 
     print("Iteration # : " + str(i))
@@ -51,5 +72,46 @@ for i in range(1,11):
     #run the function for generating the simulation <3 
     run_simulation(**inputs)
 
-#run_simulation(**inputs)
+#then, iterate over and modify inputs  
+# for i in range(1,10): 
+#     #store numSatellites 
+#     numSatellites = 40*i 
+
+#     #get # orbital planes 
+#     numPlanes = myUtils.find_closest_divisor_to_sqrt(numSatellites)
+
+#     #update inputs 
+#     inputs['numSatellites'] = numSatellites
+#     inputs['orbitalPlanes'] = numPlanes
+#     inputs['fileToSaveTo'] = "Data/" + "VariableConstHopsBasedAngleLogit" + str(numSatellites)
+#     inputs['metricToOptimize'] = "hops"
+#     inputs['inLineness'] = "angle"
+
+#     #create debug 
+#     print("Iteration # : " + str(i))
+    
+#     #run the function for generating the simulation <3 
+#     run_simulation(**inputs)
+
+# #then, iterate over and modify inputs  
+# for i in range(1,10): 
+#     #store numSatellites 
+#     numSatellites = 40*i 
+
+#     #get # orbital planes 
+#     numPlanes = myUtils.find_closest_divisor_to_sqrt(numSatellites)
+
+#     #update inputs 
+#     inputs['numSatellites'] = numSatellites
+#     inputs['orbitalPlanes'] = numPlanes
+#     inputs['fileToSaveTo'] = "Data/" + "VariableConstLatencyBasedAngleLogit" + str(numSatellites)
+#     inputs['metricToOptimize'] = "latency"
+#     inputs['inLineness'] = "angle"
+
+#     #create debug 
+#     print("Iteration # : " + str(i))
+    
+#     #run the function for generating the simulation <3 
+#     run_simulation(**inputs)
+
 
