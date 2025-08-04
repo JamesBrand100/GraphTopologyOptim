@@ -1,26 +1,36 @@
-import numpy as np
+import torch
+from torch.nn import Linear, MSELoss, ReLU, Sequential
+from torch.optim import SGD
 
-def normalize_array_and_reassign(arr):
-    print(f"Inside function (before): id of arr is {id(arr)}")
-    print(f"Inside function (before): arr is\n{arr}")
-    
-    # This creates a NEW array and the local 'arr' variable is now pointing to it
-    arr = arr / np.linalg.norm(arr, axis=-1, keepdims=True)
-    
-    print(f"\nInside function (after): id of arr is {id(arr)}")
-    print(f"Inside function (after): arr is\n{arr}")
-    return arr
+from torchjd import mtl_backward
+from torchjd.aggregation import UPGrad
 
-# The higher routine
-original_data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
-print(f"Outside function (before): id of original_data is {id(original_data)}")
-print(f"Outside function (before): original_data is\n{original_data}")
+shared_module = Sequential(Linear(10, 5), ReLU(), Linear(5, 3), ReLU())
+task1_module = Linear(3, 1)
+task2_module = Linear(3, 1)
+params = [
+    *shared_module.parameters(),
+    *task1_module.parameters(),
+    *task2_module.parameters(),
+]
 
-# Pass the array to the function and capture the returned result
-normalized_result = normalize_array_and_reassign(original_data)
+loss_fn = MSELoss()
+optimizer = SGD(params, lr=0.1)
+aggregator = UPGrad()
 
-print(f"\nOutside function (after): id of original_data is {id(original_data)}")
-print(f"Outside function (after): original_data is\n{original_data}")
+inputs = torch.randn(8, 16, 10)  # 8 batches of 16 random input vectors of length 10
+task1_targets = torch.randn(8, 16, 1)  # 8 batches of 16 targets for the first task
+task2_targets = torch.randn(8, 16, 1)  # 8 batches of 16 targets for the second task
 
-print(f"\nOutside function (after): id of normalized_result is {id(normalized_result)}")
-print(f"Outside function (after): normalized_result is\n{normalized_result}")
+for input, target1, target2 in zip(inputs, task1_targets, task2_targets):
+    features = shared_module(input)
+    output1 = task1_module(features)
+    output2 = task2_module(features)
+    loss1 = loss_fn(output1, target1)
+    loss2 = loss_fn(output2, target2)
+
+    optimizer.zero_grad()
+    mtl_backward(losses=[loss1, loss2], features=features, aggregator=aggregator)
+    optimizer.step()
+
+    print(loss1.item(), loss2.item())

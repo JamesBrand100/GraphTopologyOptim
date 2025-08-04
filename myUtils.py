@@ -45,6 +45,22 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from math import radians, sin, cos, sqrt, atan2
 import networkx as nx
 import matplotlib.colors as mcolors # Import for PowerNorm
+import collections
+
+class FixedSizeArray:
+    def __init__(self, max_length: int):
+        if not isinstance(max_length, int) or max_length <= 0:
+            raise ValueError("max_length must be a positive integer.")
+        self._values = collections.deque(maxlen=max_length)
+
+    def add_value(self, value: any):
+        self._values.append(value)
+
+    def get_average(self) -> float:
+        if not self._values:
+            return 0.0
+        total_sum = sum(self._values)
+        return total_sum / len(self._values)
 
 def generateWalkerStarConstellationPoints(
         numSatellites,
@@ -1767,13 +1783,14 @@ def calculate_generalized_algebraic_connectivity_torch(
         return torch.tensor(0.0, dtype=adj_matrix.dtype, device=adj_matrix.device)
 
     degrees = torch.sum(adj_matrix, dim=1)
+    #all diag embed is doing is creating a new matrix with the diagonal containing the degrees 
     D = torch.diag_embed(degrees)
 
     L = D - adj_matrix
 
     # --- Transformation for Generalized Eigenvalue Problem ---
-    M_diag = torch.diag(node_importance_matrix_M)
-    M_diag_sqrt_inv = 1.0 / torch.sqrt(M_diag)
+    M_diag = torch.diag(node_importance_matrix_M)       
+    M_diag_sqrt_inv = 1.0 / torch.sqrt(M_diag + 1e-8)
     M_sqrt_inv = torch.diag_embed(M_diag_sqrt_inv) # This is M^(-1/2)
 
     L_prime = M_sqrt_inv @ L @ M_sqrt_inv
@@ -1856,7 +1873,9 @@ def calculate_algebraic_connectivity(adj_matrix):
         return eigenvalues[1], eigenvectors[1]
     
 
-def plot_edge_disjoint_paths_histogram(adj_matrix):
+def plot_edge_disjoint_paths_histogram(adj_matrix,
+                                       flows = [], 
+                                       plot = True):
     """
     Calculates the number of edge-disjoint paths for all pairs in a graph
     defined by an adjacency matrix and plots a histogram of the results.
@@ -1866,7 +1885,10 @@ def plot_edge_disjoint_paths_histogram(adj_matrix):
 
     Args:
         adj_matrix (list of lists or numpy array): The adjacency matrix of the graph.
+        flows: do we weight the summation of edge disjoint paths by the relative flow of a pair
+        plot: do we plot the data
     """
+
     # Create a graph from the adjacency matrix. For unweighted graphs,
     # networkx automatically assumes a capacity of 1 for each edge.
     G = nx.from_numpy_array(np.array(adj_matrix), edge_attr='capacity')
@@ -1874,6 +1896,11 @@ def plot_edge_disjoint_paths_histogram(adj_matrix):
     # Get all unique pairs of nodes
     nodes = list(G.nodes())
     pairs = [(nodes[i], nodes[j]) for i in range(len(nodes)) for j in range(i + 1, len(nodes))]
+
+    #total weighting 
+    weightedEdgeDisjoint = 0
+
+    pdb.set_trace()
 
     # Calculate the number of edge-disjoint paths for each pair using max flow
     path_counts = []
@@ -1883,6 +1910,9 @@ def plot_edge_disjoint_paths_histogram(adj_matrix):
         # We specify Edmonds-Karp as requested.
         num_paths = nx.maximum_flow_value(G, s, t, flow_func=flow.edmonds_karp)
         path_counts.append(num_paths)
+
+        weightedEdgeDisjoint+=num_paths*flows[s][t]
+
     print("Calculation complete.")
 
     # Count the frequency of each number of paths
@@ -1895,25 +1925,27 @@ def plot_edge_disjoint_paths_histogram(adj_matrix):
     if not paths:
         print("No node pairs found or graph is empty.")
         return
+    if(plot): 
+        # --- Plotting the Histogram ---
+        plt.figure(figsize=(10, 6))
+        bar_container = plt.bar(paths, counts, color='teal', width=0.8)
 
-    # --- Plotting the Histogram ---
-    plt.figure(figsize=(10, 6))
-    bar_container = plt.bar(paths, counts, color='teal', width=0.8)
+        plt.xlabel("Number of Edge-Disjoint Paths", fontsize=12)
+        plt.ylabel("Number of Satellite Pairs", fontsize=12)
+        plt.title("Histogram of Edge-Disjoint Paths per Pair (using Edmonds-Karp)", fontsize=14)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.bar_label(bar_container, fmt='{:,.0f}') # Add labels on top of bars
+        
+        # Set x-axis ticks to be integers for clarity
+        max_paths = max(paths)
+        plt.xticks(range(max_paths + 2))
+        plt.xlim(-0.5, max_paths + 1.5)
 
-    plt.xlabel("Number of Edge-Disjoint Paths", fontsize=12)
-    plt.ylabel("Number of Satellite Pairs", fontsize=12)
-    plt.title("Histogram of Edge-Disjoint Paths per Pair (using Edmonds-Karp)", fontsize=14)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.bar_label(bar_container, fmt='{:,.0f}') # Add labels on top of bars
-    
-    # Set x-axis ticks to be integers for clarity
-    max_paths = max(paths)
-    plt.xticks(range(max_paths + 2))
-    plt.xlim(-0.5, max_paths + 1.5)
+        print("\n--- Histogram Data ---")
+        print("(Number of Paths: Number of Pairs)")
+        for path, count in sorted(histogram_data.items()):
+            print(f"({path}, {count})")
 
-    print("\n--- Histogram Data ---")
-    print("(Number of Paths: Number of Pairs)")
-    for path, count in sorted(histogram_data.items()):
-        print(f"({path}, {count})")
+        plt.show()
 
-    plt.show()
+    return paths, counts, weightedEdgeDisjoint

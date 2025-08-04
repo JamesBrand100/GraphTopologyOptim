@@ -10,6 +10,10 @@ import random
 import json
 import argparse
 from Baselines.funcedBaseline import *
+from torchjd import mtl_backward
+from torchjd.aggregation import UPGrad
+
+
 
 def run_simulation(numFlows, 
                    numSatellites, 
@@ -22,10 +26,8 @@ def run_simulation(numFlows,
                    demandDist = "popBased",
                    inLineness = "GCD"):
     #demand dist can be random or popBased
-
-    # --- 0) Define Device (NEW) ---------------------------------------------------
-    # This is the first and most important change: define the device (GPU or CPU)   
-    
+ 
+    """Hardware, randomization, environmental parameters initialization"""    
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"--- Using GPU: {torch.cuda.get_device_name(0)} ---")
@@ -33,7 +35,6 @@ def run_simulation(numFlows,
         device = torch.device("cpu")
         print("--- Using CPU ---")
 
-    # ─── 1) Configurable parameters ────────────────────────────────────────────────
     # Python built-in
     random.seed(0)
     # NumPy
@@ -63,11 +64,10 @@ def run_simulation(numFlows,
     #init routing: {"LOSweight","FWPropDiff","FWPropBig", "LearnedLogit"}
     #routingMethod = "LearnedLogit"
 
-    # ─── Prepare TensorBoard ───────────────────────────────────────────────────────
     # every run goes under runs/<timestamp> by default
     writer = SummaryWriter(comment=f"_flows={numFlows}_gamma={gamma}")
 
-    """Create node positions and demands"""
+    """Create node positions and demands, so environmental configuration"""
     positions, vecs = myUtils.generateWalkerStarConstellationPoints(numSatellites,
                                                 inclination,
                                                 orbitalPlanes,
@@ -133,7 +133,7 @@ def run_simulation(numFlows,
         # Use these indices to get the corresponding values from the matrix
         demandVals = torch.from_numpy(flows_matrix[src_indices, dst_indices]).float()
 
-        """Uplink/Downlink latency generation"""
+        #uplink / downlink latency generation 
         #get argsum / closest satellite linked populations
         row_indices = np.arange(res3Distances.shape[0])
         closest_dist = res3Distances[row_indices, closest_idx] 
@@ -151,7 +151,7 @@ def run_simulation(numFlows,
         #then, get final uplink/downlink latency
         uplinkDownlinkLatency = np.sum(weightedSatelliteLatencies * flows_matrix)
 
-    """Routing Ratio Preparations"""
+    """Differential parameter generation"""
     great_circle_prop = myUtils.great_circle_distance_matrix_cartesian(positions, 6.946e6) / (3e8)
     #great_circle_prop = torch.from_numpy(great_circle_prop).to(dtype=torch.float32).to(device) # NEW
 
@@ -174,36 +174,12 @@ def run_simulation(numFlows,
     if(inLineness == "angle"):
         #old computation for sim metric 
         similarityMetric = myUtils.batch_similarity_metric(positions, positions[dst_indices], positions)
-
-    #pdb.set_trace()
-
-    #plot points to see
-    # fig = plt.figure(figsize=(9,9))
-    # ax = fig.add_subplot(111, projection='3d')
-    # sc = ax.scatter(positions[:,0], positions[:,1], positions[:,2], s=30)
-    # plt.show()
-
-    # hold = similarityMetric.flatten()
-    # plt.title("Similarity Metric Dist. Old")
-    # plt.hist(hold,bins=10)
-    # plt.show()
-
-    # pdb.set_trace()
-
-
-
-    # ─── 5) Learnable beam logits per node, LOS restriction enabled ───────────────────────────────────────
-    #logits = torch.zeros(numSatellites, numSatellites, requires_grad=True)
-    #logits = logits.masked_fill(~feasibleMask, -1e9)
-    #opt    = torch.optim.SGD([logits[feasibleMask]], lr=lr)
-
-    # ─── 5) Learnable beam logits per node, LOS restriction enabled ───────────────────────────────────────
-    #Make restriction on logits based on feasibility...
     
     feasible_indices = feasibleMask.nonzero()  # Shape: [2, num_feasible]
     connectivity_logits = torch.nn.Parameter(torch.zeros(len(feasible_indices[0]), dtype=torch.float))
     connOpt = torch.optim.AdamW([connectivity_logits], lr=lr)
 
+    """Inter-epoch variables"""
     #create storage for loss and latency 
     loss_history = []
     total_latency = None
@@ -215,12 +191,13 @@ def run_simulation(numFlows,
     )
     reset = False
     lossArr = []
-    
-    """Gradient Descent Loop"""
-    reasonablyBadLatencyLoss = 0
-    reasonablyBadAlgConnLoss = 0
 
-    # ─── 6) Create differentiable process for learning beam allocations───────────────────────────────────────
+    #set up multi objective loss 
+    storeLatencyLoss = myUtils.FixedSizeArray(5)
+    storeResilienceLoss = myUtils.FixedSizeArray(5)
+
+    """Gradient Descent Loop"""
+    #Create differentiable process for learning beam allocations
     for epoch in range(epochs):
 
         #if we are at the last epoch, load the most recent best one. 
@@ -230,23 +207,7 @@ def run_simulation(numFlows,
         #Remove gradients 
         connOpt.zero_grad()
         
-        # Implement logit normalization 
-        # This converts our logits to valid values in the context of beam allocations 
-        # it might possibly remove....the beam restrictions
-
-        #hyperBase = None
-
-        #calculate temperature for mapping based on current levels of loss 
-        #if we have no latency right now, use temperature of 1 
-        # if(not total_latency):
-        #     c = myUtils.plus_sinkhorn(connLogits, num_iters=3, normLim = beam_budget, temperature = 1)
-        #     gamma = 1
-        # #if we can use latency for temperature calculation 
-        # else:
-        #     if(not hyperBase):
-        #         hyperBase = total_latency.item()
-
-        #logit conversion  
+        #Differentiable feasibility mapping for connectivity 
         connLogits = myUtils.build_full_logits(connectivity_logits, feasible_indices, feasibleMask.shape)
         connLogits = torch.nn.functional.softplus(connLogits)
         c = myUtils.plus_sinkhorn(connLogits, num_iters=int(8*epoch/epochs + 1), normLim = beam_budget, temperature = int(4*epoch/epochs + 1))
@@ -304,8 +265,6 @@ def run_simulation(numFlows,
             #broadcasting : repeat element entry for multiple multiplications 
             traffic_sent = T_current[:, :, None] * R.permute(1, 0, 2)  # [d, i, j]
 
-            #pdb.set_trace()
-
             # Compute latency for all traffic
             if(metricToOptimize == "latency"):
                 scaledDist = dmat / (c + 1e-6)
@@ -353,47 +312,32 @@ def run_simulation(numFlows,
             # Propagate: sum over i (source), traffic now at j for each destination d
             # T_next[d, j] = sum_i T_current[d, i] * R[i, d, j]
             T_next = torch.einsum('di,dij->dj', T_current, R.permute(1, 0, 2))  # [d, j]
-
-            #
             T_current = T_next
 
-            """Algebraic connectivity computation for loss"""
+            #Generalized algebraic connectivity for additional loss component 
             if routingMethod == "LOSweight":
                 #generate node importance storage 
                 nodeImportance = torch.ones([numSatellites,numSatellites])
                 #store node importance based on satellite populations 
-                #nodeImportance[torch.eye(numSatellites, dtype = torch.bool)] = torch.log(torch.from_numpy(satellitePopulations+1))
+                nodeImportance[torch.eye(numSatellites, dtype = torch.bool)] = torch.log(torch.from_numpy(satellitePopulations+1)).to(torch.float32)
                 #compute algebraic connectivity in a differentiable manner 
                 algebraic_connectivity = myUtils.calculate_generalized_algebraic_connectivity_torch(c,nodeImportance)
-                #total_latency = -algebraic_connectivity
+                
+        #first store values         
+        storeLatencyLoss.add_value(total_latency.detach())
+        storeResilienceLoss.add_value(algebraic_connectivity.detach())
 
-        #if we are just starting out, use this for the normalization. 
-        if(epoch == 0):
-            reasonablyBadAlgConnLoss = algebraic_connectivity.detach() 
-            reasonablyBadLatencyLoss = total_latency.detach()
-
-        #normalize each with respect to a reasonably bad value 
-        #totalLoss = 100000*(0.7*total_latency/reasonablyBadLatencyLoss + 0.3*algebraic_connectivity/reasonablyBadAlgConnLoss)
-        totalLoss = total_latency
-
-        # ─── End Latency unrolling ────────────────────────────────────────────────
-        #check if current loss is sizably worse than last loss.
-        #if it is, then reset and try again
-        # if(not reset and len(loss_history) > 0 and total_latency.item() > loss_history[-1] * 1.5):
-        #     print(f"Epoch {epoch+1}/{epochs}, Loss: {total_latency.item():.4f}")
-        #     print("Loss increased by 50%, resetting")
-            
-        #     #reset state of params / optims
-        #     reset_state(epoch)
-
-        #     reset = True          
-            
-        #     continue
-        # reset = False
-
+        #then compute respective normalized joint loss
+        totalLoss = 100000*(0.4*total_latency/storeLatencyLoss.get_average() - 0.6*algebraic_connectivity/storeResilienceLoss.get_average())
         loss_history.append(totalLoss.item())
-        totalLoss.backward(retain_graph=True)
+        
+        #mtl_backward(losses=[total_latency, -algebraic_connectivity], features=c, aggregator=aggregator)
+        #maybe this should be freed graph ...
+        # retaining graph keeps the intermediate tensors in your graph in memory
+        # these tensors are needed for the backward pass, so useful in RNNs where you use them multiple times 
+        totalLoss.backward(retain_graph=False)
 
+        #create info to double check we are not using infeasible connections 
         holdLogits = connLogits.clone()
         foldFLogits = connectivity_logits.clone()
 
@@ -401,7 +345,6 @@ def run_simulation(numFlows,
         connOpt.step()
 
         update_state(epoch, totalLoss.item())
-
         lossArr.append(totalLoss.item())
 
         print("Logit magnitude diff, all: " + str( torch.sum(torch.abs(holdLogits - connLogits))))
@@ -419,13 +362,9 @@ def run_simulation(numFlows,
     # Define file names
     #file_name = "exampleLoss360Hops.npy"
 
-    # Save each array individually
-    #np.save(file_name, lossArr)
-
-    #pdb.set_trace()
-
     # ─── Finish up ─────────────────────────────────────────────────────────────────
 
+    """Evalute and compare end solution"""
     #if we are optimizing hop count, then normalize distance matrix 
     if(metricToOptimize == "hops"):
         dmat = dmat/dmat 
@@ -434,7 +373,7 @@ def run_simulation(numFlows,
     diagSym = myUtils.diagonal_symmetry_score(c).detach().numpy()
     normScore = myUtils.normalization_score(c, ref=4.0, epsilon=1e-8).detach().numpy()
 
-    #hardcode / process connections 
+    #hardcode connections 
     c[c > 0.85] = 1
     c[c < 0.85] = 0
 
@@ -492,7 +431,7 @@ def run_simulation(numFlows,
     ) 
 
     #convert graph to valid conn components 
-    node_positions, conn = myUtils.graph_to_matrix_representation(graph)
+    node_positions, motifConn = myUtils.graph_to_matrix_representation(graph)
     #plot motif baseline 
     #myUtils.plot_connectivity(node_positions, conn, figsize=(8,8))
 
@@ -501,30 +440,38 @@ def run_simulation(numFlows,
 
     #plot components for each of the approaches 
 
-    _, link_utilization_gplus, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
-    #myUtils.plot_connectivity(positions, gridPlusConn, link_utilization_gplus, figsize=(8,8))
-    #myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn)
+    #look at link utilization / network metrics for each 
+    if(False):
+        _, link_utilization_gplus, _= myUtils.calculate_network_metrics(gridPlusConn, T_store)
+        myUtils.plot_connectivity(positions, gridPlusConn, link_utilization_gplus, figsize=(8,8), maxUtil = np.max(link_utilization_gplus))
+        #myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn)
 
-    _, link_utilization_motif, _= myUtils.calculate_network_metrics(conn.astype(bool), T_store)
-    myUtils.plot_connectivity(positions, conn, link_utilization_motif, figsize=(8,8))
+        _, link_utilization_motif, _= myUtils.calculate_network_metrics(motifConn.astype(bool), T_store)
+        myUtils.plot_connectivity(positions, motifConn.astype(bool), link_utilization_motif, figsize=(8,8), maxUtil = np.max(link_utilization_gplus))
 
-    #compare data from motif to grid plus 
-    pdb.set_trace()
-    #myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn)
+        #compare data from motif to grid plus 
+        pdb.set_trace()
+        #myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn)
 
-    _, link_utilization_diff, _= myUtils.calculate_network_metrics(c.astype(bool), T_store)
-    myUtils.plot_connectivity(positions, c.astype(bool), link_utilization_diff, figsize=(8,8), maxUtil = np.max(link_utilization_gplus))
-    #myUtils.plot_edge_disjoint_paths_histogram(c.astype(bool))
+        _, link_utilization_diff, _= myUtils.calculate_network_metrics(c.astype(bool), T_store)
+        myUtils.plot_connectivity(positions, c.astype(bool), link_utilization_diff, figsize=(8,8), maxUtil = np.max(link_utilization_gplus))
+        #myUtils.plot_edge_disjoint_paths_histogram(c.astype(bool))
 
-    # Save the arrays
-    np.savez("linkUtilData.npz",
-            positions=positions,
-            gridPlusConn=gridPlusConn,
-            c=c,
-            link_utilization_gplus=link_utilization_gplus,
-            link_utilization_diff=link_utilization_diff)
-
+        # Save the arrays
+        np.savez("linkUtilData.npz",
+                positions=positions,
+                gridPlusConn=gridPlusConn,
+                c=c,
+                link_utilization_gplus=link_utilization_gplus,
+                link_utilization_diff=link_utilization_diff)
+    
+    #save or print a bunch of metrics 
+    pathsGridPlus, countsGridPlus, weightedEdgeDisjointGridPlus = myUtils.plot_edge_disjoint_paths_histogram(gridPlusConn, T_store, False)
+    pathsMotif, countsMotif, weightedEdgeDisjointMotif  = myUtils.plot_edge_disjoint_paths_histogram(motifConn.astype(bool), T_store, False)
+    pathsC, countsC, weightedEdgeDisjointC  = myUtils.plot_edge_disjoint_paths_histogram(c.astype(bool), T_store, False)
+    
     #save all metrics to dictionary
+    #save metrics for latency 
     metrics = {}
     metrics["Diagonal Symmetry Score"] = float(diagSym) 
     metrics["Row/Col Normalization Score"] = float(normScore)
@@ -534,6 +481,12 @@ def run_simulation(numFlows,
     metrics["Total Demand"] = float(totalDemand)
     metrics["Objective"] = str(metricToOptimize)
     metrics["Latency Addendum"] = float(uplinkDownlinkLatency)
+
+    #save metrics for resilience 
+    metrics["Paths Grid Plus"] = pathsGridPlus
+    metrics["Counts Grid Plus"] = countsGridPlus
+    metrics["Counts Motif"] = countsMotif
+    metrics["Counts C"] = countsC
 
     writer.close()
 
@@ -545,6 +498,16 @@ def run_simulation(numFlows,
     print(str(diffSumLatency/ totalDemand))
     print(str(gridPlusSumLatency/ totalDemand))
     print(str(motifSumLatency/ totalDemand))
+
+    print("Edge disjoint paths")
+    print(countsGridPlus)
+    print(countsMotif)
+    print(countsC)
+
+    print("Weighted Edge Disjoint Paths")
+    print(weightedEdgeDisjointGridPlus)
+    print(weightedEdgeDisjointMotif)
+    print(weightedEdgeDisjointC)
 
     # Save the dictionary to a file, if we give a proper name 
     if(fileToSaveTo != "None"):
@@ -609,8 +572,8 @@ def run_main():
     parser = argparse.ArgumentParser(description='Run the simulation')
     parser.add_argument('--numFlows', type=int, default=20, help='Number of flows')
     parser.add_argument('--epochs', type=int, default=2, help='Number of epochs')
-    parser.add_argument('--numSatellites', type=int, default=225, help='Number of satellites')
-    parser.add_argument('--orbitalPlanes', type=int, default=15, help='Number of orbital planes')
+    parser.add_argument('--numSatellites', type=int, default=160, help='Number of satellites')
+    parser.add_argument('--orbitalPlanes', type=int, default=10, help='Number of orbital planes')
     parser.add_argument('--routingMethod', type=str, default='LOSweight', choices=['LOSweight', 'FWPropDiff', 'FWPropBig', 'LearnedLogit'], help='Routing method')
     parser.add_argument('--lr', type=float, default=0.03, help='Learning rate')
     parser.add_argument('--fileName', type=str, default="None", help='File to save to <3, without json tag')

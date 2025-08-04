@@ -44,7 +44,7 @@ for i in range(1,10):
     #update inputs 
     inputs['numSatellites'] = numSatellites
     inputs['orbitalPlanes'] = numPlanes
-    inputs['fileToSaveTo'] = "Data/" + "VariableConstHopsBasedGCDLogit" + str(numSatellites)
+    inputs['fileToSaveTo'] = "Data/" + "VariableConstHopsJoint" + str(numSatellites)
 
     #create debug 
     print("Iteration # : " + str(i))
